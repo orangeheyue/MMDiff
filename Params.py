@@ -19,6 +19,7 @@ def ParseArgs():
 
 	parser.add_argument('--keepRate', default=0.5, type=float, help='ratio of edges to keep')
 	
+
 	parser.add_argument('--dims', type=str, default='[1000]')
 	parser.add_argument('--d_emb_size', type=int, default=10)
 	parser.add_argument('--norm', type=bool, default=False)
@@ -28,7 +29,11 @@ def ParseArgs():
 	parser.add_argument('--noise_max', type=float, default=0.02)
 	parser.add_argument('--sampling_noise', type=bool, default=False)
 	parser.add_argument('--sampling_steps', type=int, default=0)
-
+	parser.add_argument('--image_feats_dim', type=int, default=128)
+	parser.add_argument('--text_feats_dim', type=int, default=768)
+	parser.add_argument('--audio_feats_dim', type=int, default=128)
+	
+	
 	parser.add_argument('--rebuild_k', type=int, default=1)
 	parser.add_argument('--e_loss', type=float, default=0.1)
 	parser.add_argument('--ris_lambda', type=float, default=0.5)

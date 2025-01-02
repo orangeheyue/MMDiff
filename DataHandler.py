@@ -220,14 +220,15 @@ class MultimodalFeatureDataset(data.Dataset):
 			self.audio_feats = audio_feats 
 
 	def __len__(self):
-		return len(self.data)
+		return self.image_feats.shape[0]
 	
 	def __getitem__(self, index):
 		image_modal_feature = self.image_feats[index]
 		text_modal_feature = self.text_feats[index]
 		if self.audio_feats is not None:
 			audio_modal_feature = self.audio_feats[index]
-		
+
+		# print("image_modal_feature.shape:",image_modal_feature.shape, "text_modal_feature.shape:", text_modal_feature.shape, "audio_modal_feature.shape:", audio_modal_feature.shape)
 		return (image_modal_feature, text_modal_feature, audio_modal_feature) if self.audio_feats is not None else (image_modal_feature, text_modal_feature)
 	
 

@@ -24,6 +24,7 @@ class GCNModel(nn.Module):
 		self.reg_weight =  1e-04
 		self.batch_size = 1024
 
+
 		# modal feature embedding
 		self.image_embedding = image_embedding
 		self.text_embedding = text_embedding
@@ -63,25 +64,25 @@ class GCNModel(nn.Module):
 		self.softmax = nn.Softmax(dim=-1)
 
 		self.gate_image_modal = nn.Sequential(
-            nn.Linear(args.latdi, args.latdi),
+            nn.Linear(args.latdim, args.latdim),
             nn.Sigmoid()
         )
 
 		self.gate_text_modal = nn.Sequential(
-            nn.Linear(args.latdi, args.latdi),
+            nn.Linear(args.latdim, args.latdim),
             nn.Sigmoid()
         )
 
 		self.gate_audio_modal = nn.Sequential(
-            nn.Linear(args.latdi, args.latdi),
+            nn.Linear(args.latdim, args.latdim),
             nn.Sigmoid()
         )
 
 
 		self.caculate_common = nn.Sequential(
-            nn.Linear(args.latdi, args.latdi),
+            nn.Linear(args.latdim, args.latdim),
             nn.LeakyReLU(),
-            nn.Linear(args.latdi, 1, bias=False)
+            nn.Linear(args.latdim, 1, bias=False)
         )
 
 
@@ -95,13 +96,13 @@ class GCNModel(nn.Module):
 		'''
 			获取Item embedding
 		'''
-		return self.item_id_embedding
+		return self.item_id_embedding.weight
 
 	def getUserEmbeds(self):
 		'''
 			获取User embedding
 		'''
-		return self.user_embedding
+		return self.user_embedding.weight
 	
 	def getImageFeats(self):
 		'''
@@ -131,15 +132,16 @@ class GCNModel(nn.Module):
 		'''
 			多模态特征提取与fusion
 		'''
-		multimodal_feature_fusion_adj =   diffusion_ii_image_adj + diffusion_ii_text_adj + diffusion_ii_audio_adj
+		multimodal_feature_fusion_adj =  diffusion_ii_image_adj + diffusion_ii_text_adj + diffusion_ii_audio_adj
 
 		return multimodal_feature_fusion_adj
 
 	def user_item_GCN(self, original_ui_adj, diffusion_ui_adj):
 		'''
 			User-Item GCN
+			TODO: diffusion_ui_adj目前简单的进行融合
 		'''
-		adj = original_ui_adj + diffusion_ui_adj
+		adj = original_ui_adj + diffusion_ui_adj # 
 		cat_embedding = torch.cat([self.item_id_embedding.weight, self.user_embedding.weight], dim=0)
 
 		all_embeddings = [cat_embedding]
@@ -154,7 +156,6 @@ class GCNModel(nn.Module):
 
 		return content_embedding
 
-
 	def item_item_GCN(self, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
 		'''
 			Item-Item GCN
@@ -168,10 +169,11 @@ class GCNModel(nn.Module):
 
 		if args.data == 'tiktok':
 			audio_modal_feature = self.getAudioFeats()
-			audio_mdoal_feature = torch.multiply(self.item_id_embedding.weight, self.gate_audio_modal(audio_mdoal_feature))
-
-
+			audio_item_id_embedding = torch.multiply(self.item_id_embedding.weight, self.gate_audio_modal(audio_modal_feature))
+		# print("original_ui_adj:", original_ui_adj)
+		# print("original_ui_adj.shape:", original_ui_adj.shape)
 		# user-user adj
+		
 		self.R = original_ui_adj[: args.user, args.user :] 
 
 		if self.sparse:
@@ -232,11 +234,6 @@ class GCNModel(nn.Module):
 			special_text_ui_embedding  = text_ui_embedding - common_embedding
 
 			return sepcial_image_ui_embedding, special_text_ui_embedding, common_embedding
-
-
-	def calculate_loss(self):
-		pass
-
 
 
 	def bpr_loss(self, anc_embeds, pos_embeds, neg_embeds):
@@ -587,7 +584,89 @@ class SpAdjDropEdge(nn.Module):
 		newIdxs = idxs[:, mask]
 
 		return torch.sparse.FloatTensor(newIdxs, newVals, adj.shape)
+
+
+class ModalDenoise(nn.Module):
+	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
+		'''
+			生成epsilon
+			没有Embedding ?
+		'''
+		super(ModalDenoise, self).__init__()
+		self.in_dims = in_dims # 128
+		self.out_dims = out_dims # 128
+		self.time_emb_dim = emb_size # 10
+		# print("self.in_dims:", self.in_dims)
+		# print("self.out_dims", self.out_dims)
+		# print("self.time_emb_dim:", self.time_emb_dim)
+		self.norm = norm
+		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
+
+		self.down_sampling = nn.Sequential(
+			nn.Linear(in_features=(self.in_dims + self.time_emb_dim), out_features=self.in_dims//2),
+			nn.BatchNorm1d(self.in_dims//2),
+			nn.LeakyReLU(),
+			nn.Dropout(),
+			nn.Linear(in_features=self.in_dims//2, out_features=self.in_dims//4),
+			nn.BatchNorm1d(self.in_dims//4),
+			nn.LeakyReLU(),
+			nn.Dropout()
+		)
+
+		self.up_sampling = nn.Sequential(
+			nn.Linear(in_features=self.in_dims//4, out_features=self.in_dims//2),
+			nn.BatchNorm1d(self.in_dims//2),
+			nn.LeakyReLU(),
+			nn.Dropout(),
+			nn.Linear(in_features=self.in_dims//2, out_features=self.in_dims),
+			nn.BatchNorm1d(self.in_dims),
+			nn.LeakyReLU(),
+			nn.Dropout()
+		)
+
 		
+		self.drop = nn.Dropout(dropout)
+		self.initialize_weights()
+
+	def initialize_weights(self):
+			"""
+			对down_sampling和up_sampling中的线性层权重和偏差进行初始化
+			"""
+			for module_seq in [self.down_sampling, self.up_sampling]:
+				for layer in module_seq:
+					if isinstance(layer, nn.Linear):
+						size = layer.weight.size()
+						std = np.sqrt(2.0 / (size[0] + size[1]))
+						layer.weight.data.normal_(0.0, std)
+						layer.bias.data.normal_(0.0, 0.001)
+
+	def forward(self, x, timesteps, mess_dropout=True):
+		# print("x.shape:", x.shape) # x.shape: torch.Size([1024, 128])
+		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda()
+		temp = timesteps[:, None].float() * freqs[None]
+		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)
+		if self.time_emb_dim % 2:
+			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
+		#print("time_emb.shape:", time_emb.shape)
+		emb = self.emb_layer(time_emb)
+		
+		if self.norm:
+			x = F.normalize(x)
+		if mess_dropout:
+			x = self.drop(x)
+		# print("x.shape:", x.shape) # x.shape: torch.Size([1024, 128])
+		# print("emb.shape:", emb.shape)
+		h = torch.cat([x, emb], dim=-1)
+		#print("h0.shape:", h.shape) # h1.shape: torch.Size([1024, 138])
+		# dowm sapmling
+		h = self.down_sampling(h)
+		#print("h2.shape:", h.shape) # h2.shape: torch.Size([1024, 32])
+		# up sampling
+		h = self.up_sampling(h)
+		#print("h3.shape:", h.shape) # h3.shape: torch.Size([1024, 128])
+		return h
+
+
 class Denoise(nn.Module):
 	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
 		'''
@@ -608,7 +687,7 @@ class Denoise(nn.Module):
 
 		self.in_layers = nn.ModuleList([nn.Linear(d_in, d_out) for d_in, d_out in zip(in_dims_temp[:-1], in_dims_temp[1:])])
 		self.out_layers = nn.ModuleList([nn.Linear(d_in, d_out) for d_in, d_out in zip(out_dims_temp[:-1], out_dims_temp[1:])])
-
+		
 		self.drop = nn.Dropout(dropout)
 		self.init_weights()
 
@@ -631,6 +710,7 @@ class Denoise(nn.Module):
 		self.emb_layer.bias.data.normal_(0.0, 0.001)
 
 	def forward(self, x, timesteps, mess_dropout=True):
+		#print("x.shape:", x.shape)
 		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda()
 		temp = timesteps[:, None].float() * freqs[None]
 		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)
@@ -649,8 +729,9 @@ class Denoise(nn.Module):
 			h = layer(h)
 			if i != len(self.out_layers) - 1:
 				h = torch.tanh(h)
-
+		#print("h.shape:", h.shape)
 		return h
+
 
 class GaussianDiffusion(nn.Module):
 	def __init__(self, noise_scale, noise_min, noise_max, steps, beta_fixed=True):
@@ -668,6 +749,7 @@ class GaussianDiffusion(nn.Module):
 
 			self.calculate_for_diffusion()
 
+		self.i = 0
 	def get_betas(self):
 		start = self.noise_scale * self.noise_min
 		end = self.noise_scale * self.noise_max
@@ -766,7 +848,7 @@ class GaussianDiffusion(nn.Module):
 
 		'''
 		batch_size = x_start.size(0) # 1024
-		# print("x_start.shape:", x_start.shape)
+		
 		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda() # ts: tensor([2, 3, 3,  ..., 0, 1, 1], device='cuda:0')
 
 		noise = torch.randn_like(x_start) 
@@ -777,7 +859,8 @@ class GaussianDiffusion(nn.Module):
 			x_t = x_start
 		
 		# x_t作为采样后加噪的特征，形状不变
-		# print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
+		#print("x_start.shape:", x_start.shape)
+		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
 		model_output = model(x_t, ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
 
 		mse = self.mean_flat((x_start - model_output) ** 2)
@@ -794,13 +877,16 @@ class GaussianDiffusion(nn.Module):
 
 		return diff_loss, gc_loss
 	
+
 	def training_multimodal_feature_diffusion_losses(self, model, x_start):
 		'''
 			model: 降噪模型
 
 		'''
+		self.i += 1
+		#print("self.i:", self.i)
 		batch_size = x_start.size(0) # 1024
-		# print("x_start.shape:", x_start.shape)
+		#print("x_start.shape:", x_start.shape) # x_start.shape: torch.Size([1024, 128])
 		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda() # ts: tensor([2, 3, 3,  ..., 0, 1, 1], device='cuda:0')
 
 		noise = torch.randn_like(x_start) 
@@ -811,17 +897,23 @@ class GaussianDiffusion(nn.Module):
 			x_t = x_start
 		
 		# x_t作为采样后加噪的特征，形状不变
-		# print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
+		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 128]) 
+		#print("x_start.shape:", x_start.shape)
+		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
 		model_output = model(x_t, ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
-
+		#print("noise:", noise.shape, "model_output:", model_output.shape) # noise: torch.Size([1024, 128]) model_output: torch.Size([1024, 138])
 		mse = self.mean_flat((noise - model_output) ** 2)
+		#print("mse:", mse.shape)
+		modal_feature_diffusion_loss = mse
+		# weight = self.SNR(ts - 1) - self.SNR(ts)
+		# weight = torch.where((ts == 0), 1.0, weight)
 
-		weight = self.SNR(ts - 1) - self.SNR(ts)
-		weight = torch.where((ts == 0), 1.0, weight)
-
-		modal_feature_diffusion_loss = weight * mse
+		# modal_feature_diffusion_loss = weight * mse
 
 		return modal_feature_diffusion_loss
+		
+
+
 		
 	def mean_flat(self, tensor):
 		return tensor.mean(dim=list(range(1, len(tensor.shape))))

@@ -2,7 +2,7 @@ import torch
 import Utils.TimeLogger as logger
 from Utils.TimeLogger import log
 from Params import args
-from Model import Model, GaussianDiffusion, Denoise, GCNModel
+from Model import Model, GaussianDiffusion, Denoise, ModalDenoise, GCNModel
 from DataHandler import DataHandler
 import numpy as np
 from Utils.Utils import *
@@ -71,12 +71,14 @@ class Coach:
 			self.model = GCNModel(self.handler.image_feats.detach(), self.handler.text_feats.detach()).cuda()
 		self.opt = torch.optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=0)
 
-		# 扩散模型：辅助模型，用来进行生成特征和交互图，计算扩散损失
-		self.diffusion_model = GaussianDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda()
+		# 扩散模型：辅助模型，用来进行生成特征和交互图，计算扩散损失 
+		# TODO: 这里还是原本的DDPM，用于生成密集的密集型特征，但是对于交互矩阵等稀疏型特征，我们可以设计一种新的稀疏型Diffusion: Sparse Diffusion 
+		self.diffusion_model = GaussianDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda() 
 		
 		# 扩散模型中的降噪模型，用于预测反向生成的噪音
 		out_dims = eval(args.dims) + [args.item]
 		in_dims = out_dims[::-1]
+		#print("in_dims:",in_dims, "out_dims:", out_dims)
 		self.denoise_model_image = Denoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
 		self.denoise_opt_image = torch.optim.Adam(self.denoise_model_image.parameters(), lr=args.lr, weight_decay=0)
 
@@ -93,20 +95,23 @@ class Coach:
 			self.denoise_opt_audio = torch.optim.Adam(self.denoise_model_audio.parameters(), lr=args.lr, weight_decay=0)
 		
 		'''
-			实例化多模态扩散降噪模型
+			实例化多模态特征扩散降噪模型
 		'''
-		in_dims = args.item
-		out_dims= args.item
-		self.image_modal_denoise_model = Denoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		in_dims = args.image_feats_dim
+		out_dims= args.image_feats_dim
+		# print("in_dims:", in_dims, "out_dims:", out_dims) # in_dims: [6710] out_dims: [6710]
+		self.image_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
 		self.image_modal_denoise_optimizer = torch.optim.Adam(self.image_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
 
-		self.text_modal_denoise_model = Denoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		in_dims = args.text_feats_dim
+		out_dims= args.text_feats_dim
+		self.text_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
 		self.text_modal_denoise_optimizer = torch.optim.Adam(self.text_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
 
 		if args.data == 'tiktok':
-					in_dims = args.item
-					out_dims= args.item
-					self.audio_modal_denoise_model = Denoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+					in_dims = args.audio_feats_dim
+					out_dims= args.audio_feats_dim
+					self.audio_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
 					self.audio_modal_denoise_optimizer = torch.optim.Adam(self.audio_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
 
 
@@ -173,29 +178,33 @@ class Coach:
 			'''
 				
 			'''
-			if len(data > 2):
+			if len(data)  > 2 :
 				image_batch, text_batch, audio_batch  = data  
 				image_batch, text_batch, audio_batch = image_batch.cuda(), text_batch.cuda(), audio_batch.cuda()
+				
 			else:
 				image_batch, text_batch  = data 
 				image_batch, text_batch = image_batch.cuda(), text_batch.cuda()
 
+			#print("image_batch.shape:", image_batch.shape, "text_batch.shape:", text_batch.shape, "audio_batch.shape:", audio_batch.shape)
 			self.image_modal_denoise_optimizer.zero_grad()
 			self.text_modal_denoise_optimizer.zero_grad()
 			if args.data == 'tiktok':
 				self.audio_modal_denoise_optimizer.zero_grad()
 			# caculate the diffusion mse loss 
 			# TODO: how to deal with multimodal ? parallel or cross?
+			#print("image_batch.shape:", image_batch.shape) # image_batch.shape: torch.Size([1024, 128])
 			image_modal_difussion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
 				model=self.image_modal_denoise_model,
 				x_start=image_batch
 			) 
-
+			#print("image diffusion done------->")
+			#print("text_batch.shape:", text_batch.shape)
 			text_modal_diffusion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
 				model=self.text_modal_denoise_model,
 				x_start=text_batch 
 			)
-
+			#print("audio_batch.shape:", audio_batch.shape)
 			audio_modal_diffusion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
 				model=self.audio_modal_denoise_model,
 				x_start=audio_batch
@@ -238,7 +247,7 @@ class Coach:
 				audio_modal_diffusion_representation_list = []
 
 			for _, data in enumerate(multimodalFeatureLoader):
-				if len(data > 2):
+				if len(data) > 2:
 					image_batch, text_batch, audio_batch  = data  
 					image_batch, text_batch, audio_batch = image_batch.cuda(), text_batch.cuda(), audio_batch.cuda()
 				else:
@@ -262,7 +271,7 @@ class Coach:
 			self.image_modal_diffusion_representation = torch.concat(image_modal_diffusion_representation_list)
 			self.text_modal_diffusion_representation = torch.concat(text_modal_diffusion_representation_list)
 			# 生成Item2Item Graph
-			self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_diffusion_representation)
+			self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_difsfusion_representation)
 			self.text_II_matrix = self.buildItem2ItemMatrix(self.text_modal_diffusion_representation)
 			if args.data == 'tiktok':
 							self.audio_modal_diffusion_representation = torch.concat(audio_modal_diffusion_representation_list)
@@ -271,6 +280,8 @@ class Coach:
 			log('Generate Multimodal Diffusion Feature Representation Done!')
 
 			log('Generate Multimodal Item Item Graph Done!')
+
+
 
 		# 交互图的扩散与生成
 		for i, batch in enumerate(diffusionLoader):
@@ -313,6 +324,7 @@ class Coach:
 			# print("text_feats.shape:", image_feats.shape)
 			# print("audio_feats:", image_feats)
 			# print("audio_feats.shape:", image_feats.shape)
+
 			diff_loss_image, gc_loss_image = self.diffusion_model.training_losses(self.denoise_model_image, batch_item, iEmbeds, batch_index, image_feats)
 			diff_loss_text, gc_loss_text = self.diffusion_model.training_losses(self.denoise_model_text, batch_item, iEmbeds, batch_index, text_feats)
 			if args.data == 'tiktok':
@@ -322,6 +334,7 @@ class Coach:
 			loss_text = diff_loss_text.mean() + gc_loss_text.mean() * args.e_loss
 			if args.data == 'tiktok':
 				loss_audio = diff_loss_audio.mean() + gc_loss_audio.mean() * args.e_loss
+
 
 			epDiLoss_image += loss_image.item()
 			epDiLoss_text += loss_text.item()
@@ -344,7 +357,6 @@ class Coach:
 
 		log('')
 		log('Start to re-build UI matrix')
-
 
 		with torch.no_grad():
 
@@ -555,10 +567,16 @@ class Coach:
 		steps = num // args.tstBat
 
 		if args.data == 'tiktok':
-			usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix)
+			# usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix)
+			diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+			# all_embeddings_users, all_embeddings_items, side_embedding, content_embedding
+			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix) 
 		else:
-			usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix)
+			#usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix)
+			diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix  # TODO 这里是暂时这样写的
+			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix)
 
+		# Inference
 		for usr, trnMask in tstLoader:
 			i += 1
 			usr = usr.long().cuda()
