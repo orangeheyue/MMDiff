@@ -345,6 +345,7 @@ class Coach:
 		log('')
 		log('Start to re-build UI matrix')
 
+
 		with torch.no_grad():
 
 			u_list_image = []

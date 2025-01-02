@@ -236,7 +236,6 @@ class GCNModel(nn.Module):
 
 	def calculate_loss(self):
 		pass
-	
 
 
 

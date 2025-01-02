@@ -96,7 +96,7 @@ class DataHandler:
 		'''
 			加载多模态特征：
 			image_feats.shape: torch.Size([6710, 128])
-			text_feats.shape: torch.Size([6710, 128])
+			text_feats.shape: torch.Size([6710, 768])
 			audio_feats.shape: torch.Size([6710, 128])
 		'''
 		self.image_feats, args.image_feat_dim = self.loadFeatures(self.imagefile)
