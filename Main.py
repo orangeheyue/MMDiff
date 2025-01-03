@@ -271,7 +271,7 @@ class Coach:
 			self.image_modal_diffusion_representation = torch.concat(image_modal_diffusion_representation_list)
 			self.text_modal_diffusion_representation = torch.concat(text_modal_diffusion_representation_list)
 			# 生成Item2Item Graph
-			self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_difsfusion_representation)
+			self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_diffusion_representation)
 			self.text_II_matrix = self.buildItem2ItemMatrix(self.text_modal_diffusion_representation)
 			if args.data == 'tiktok':
 							self.audio_modal_diffusion_representation = torch.concat(audio_modal_diffusion_representation_list)
@@ -474,13 +474,17 @@ class Coach:
 
 			if args.data == 'tiktok':
 				diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+				# print("self.image_UI_matrix:", self.image_UI_matrix)
+				# print("self.text_UI_matrix", self.text_UI_matrix)
+				# print("self.audio_UI_matrix:", self.audio_UI_matrix)
+				# print("diffusion_ui_adj:", diffusion_ui_adj)
 				# all_embeddings_users, all_embeddings_items, side_embedding, content_embedding
-				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix) 
+				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix) 
 				#usrEmbeds, itmEmbeds = self.model.forward(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix) # GCN
 			else:
 				# usrEmbeds, itmEmbeds = self.model.forward(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix)
 				diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix  # TODO 这里是暂时这样写的
-				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix)
+				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix)
 
 			# Caculate Loss
 			ancEmbeds = usrEmbeds[ancs]
@@ -567,14 +571,14 @@ class Coach:
 		steps = num // args.tstBat
 
 		if args.data == 'tiktok':
-			# usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix)
+			#usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix)
 			diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
 			# all_embeddings_users, all_embeddings_items, side_embedding, content_embedding
-			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix) 
+			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix) 
 		else:
 			#usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix)
 			diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix  # TODO 这里是暂时这样写的
-			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix)
+			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix)
 
 		# Inference
 		for usr, trnMask in tstLoader:

@@ -139,8 +139,11 @@ class GCNModel(nn.Module):
 	def user_item_GCN(self, original_ui_adj, diffusion_ui_adj):
 		'''
 			User-Item GCN
+			original_ui_adj:size=(16018, 16018)
+			diffusion_ui_adj:size=(6710, 6710)
 			TODO: diffusion_ui_adj目前简单的进行融合
 		'''
+		#print("original_ui_adj:", original_ui_adj, "diffusion_ui_adj:", diffusion_ui_adj)
 		adj = original_ui_adj + diffusion_ui_adj # 
 		cat_embedding = torch.cat([self.item_id_embedding.weight, self.user_embedding.weight], dim=0)
 
@@ -156,7 +159,7 @@ class GCNModel(nn.Module):
 
 		return content_embedding
 
-	def item_item_GCN(self, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
+	def item_item_GCN(self, original_ui_adj, R, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
 		'''
 			Item-Item GCN
 		'''
@@ -170,12 +173,12 @@ class GCNModel(nn.Module):
 		if args.data == 'tiktok':
 			audio_modal_feature = self.getAudioFeats()
 			audio_item_id_embedding = torch.multiply(self.item_id_embedding.weight, self.gate_audio_modal(audio_modal_feature))
-		# print("original_ui_adj:", original_ui_adj)
+
 		# print("original_ui_adj.shape:", original_ui_adj.shape)
 		# user-user adj
-		
-		self.R = original_ui_adj[: args.user, args.user :] 
-
+		self.R = R
+		# print("original_ui_adj:", original_ui_adj)
+		# print("R:", R)
 		if self.sparse:
 			for _ in range(self.gcn_layer_num):
 				image_item_id_embedding = torch.sparse.mm(diffusion_ii_image_adj, image_item_id_embedding)
@@ -289,12 +292,12 @@ class GCNModel(nn.Module):
 
 	def reg_loss(self):
 		ret = 0
-		ret += self.user_embedding.norm(2).square()
-		ret += self.item_id_embedding.norm(2).square()
+		ret += self.user_embedding.weight.norm(2).square()
+		ret += self.item_id_embedding.weight.norm(2).square()
 		return ret 
 
 
-	def forward(self, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
+	def forward(self,R, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
 		'''
 			GCN 前向过程:
 				1. 多模态特征提取与fusion
@@ -317,9 +320,10 @@ class GCNModel(nn.Module):
 		# 多模态特征提取与fusion
 	
 		content_embedding = self.user_item_GCN(original_ui_adj, diffusion_ui_adj)
+		#print("user-item gcn-------->content_embedding.shape", content_embedding.shape) # torch.Size([16018, 64])
 
 		if args.data == 'tiktok':
-			image_ui_embedding, text_ui_embedding, audio_ui_embedding = self.item_item_GCN(original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj)
+			image_ui_embedding, text_ui_embedding, audio_ui_embedding = self.item_item_GCN(original_ui_adj, R, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj)
 
 			sepcial_image_ui_embedding, special_text_ui_embedding, special_audio_ui_embedding, common_embedding = self.gate_attention_fusion(image_ui_embedding, text_ui_embedding, audio_ui_embedding)
 			image_prefer_embedding = self.gate_image_modal(content_embedding) 
@@ -333,7 +337,7 @@ class GCNModel(nn.Module):
 			side_embedding = (sepcial_image_ui_embedding + special_text_ui_embedding + special_audio_ui_embedding + common_embedding) / 4
 			all_embedding = content_embedding + side_embedding
 		else:
-			image_ui_embedding, text_ui_embedding = self.item_item_GCN(original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None)
+			image_ui_embedding, text_ui_embedding = self.item_item_GCN(original_ui_adj, R, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None)
 			sepcial_image_ui_embedding, special_text_ui_embedding, common_embedding = self.gate_attention_fusion(image_ui_embedding, text_ui_embedding, audio_ui_embedding=None)
 			image_prefer_embedding = self.gate_image_modal(content_embedding) 
 			text_prefer_embedding = self.gate_text_modal(content_embedding) 
@@ -344,7 +348,7 @@ class GCNModel(nn.Module):
 			all_embedding = content_embedding + side_embedding
 		
 		# split 
-		all_embeddings_users, all_embeddings_items = torch.split(all_embedding, [args.user, args.items], dim=0)
+		all_embeddings_users, all_embeddings_items = torch.split(all_embedding, [args.user, args.item], dim=0)
 		
 		return all_embeddings_users, all_embeddings_items, side_embedding, content_embedding
 

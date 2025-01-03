@@ -50,12 +50,32 @@ class DataHandler:
 		mat = (mat != 0) * 1.0
 		mat = (mat + sp.eye(mat.shape[0])) * 1.0
 		mat = self.normalizeAdj(mat)
+	
+		# mat_ = mat.tolil()
+		print("mat:", mat)
+		# slice_mat = mat_[: args.user, args.user :] 
+		mat_ = mat.tocsr()[: args.user, args.user :].tocoo()
+		print("mat_:", mat_)
+		# print("mat.tolil():", mat.tolil())
+		# print('---->', slice_mat[:5])
+		# make sub tensor
+		idxs_ = torch.from_numpy(np.vstack([mat_.row, mat_.col]).astype(np.int64))
+		vals_ = torch.from_numpy(mat_.data.astype(np.float32))
+		shape_ = torch.Size(mat_.shape)
+		data_ = torch.sparse.FloatTensor(idxs_, vals_, shape_).cuda()
 
+		# print("data_:", data_)
 		# make cuda tensor
 		idxs = torch.from_numpy(np.vstack([mat.row, mat.col]).astype(np.int64))
 		vals = torch.from_numpy(mat.data.astype(np.float32))
 		shape = torch.Size(mat.shape)
-		return torch.sparse.FloatTensor(idxs, vals, shape).cuda()
+		data = torch.sparse.FloatTensor(idxs, vals, shape).cuda()
+		# print("sparse data:", data[: 1, 1 :] )
+		print("data:", data)
+		print("data_:", data_)
+		return data_, data
+	
+
 
 	def loadFeatures(self, filename):
 		feats = np.load(filename)
@@ -86,7 +106,7 @@ class DataHandler:
 		# print("self.trnMat.A:", self.trnMat.A)
 		# print("self.trnMat.A.shape:", (self.trnMat.A).shape)
 		args.user, args.item = trnMat.shape
-		self.torchBiAdj = self.makeTorchAdj(trnMat) # 生成(user+item, user+item)稀疏邻接矩阵 torchBiAdj.shape: torch.Size([16018, 16018])
+		self.R , self.torchBiAdj = self.makeTorchAdj(trnMat) # 生成(user+item, user+item)稀疏邻接矩阵 torchBiAdj.shape: torch.Size([16018, 16018])
 
 		trnData = TrnData(trnMat) # 构造一个可索引的dataloader,返回user 索引, item索引, 负样本索引
 		self.trnLoader = dataloader.DataLoader(trnData, batch_size=args.batch, shuffle=True, num_workers=0)
