@@ -995,6 +995,12 @@ class BernoulliDiffusion(nn.Module):
 		return diff_loss, gc_loss
 	
 
+	def mean_flat(self, tensor):
+		return tensor.mean(dim=list(range(1, len(tensor.shape))))
+	
+	def SNR(self, t):
+		self.alphas_cumprod = self.alphas_cumprod.cuda()
+		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t])
 
 
 class GaussianDiffusion(nn.Module):
