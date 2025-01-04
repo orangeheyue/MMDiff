@@ -2,7 +2,7 @@ import torch
 import Utils.TimeLogger as logger
 from Utils.TimeLogger import log
 from Params import args
-from Model import Model, GaussianDiffusion, Denoise, ModalDenoise, GCNModel
+from Model import Model, GaussianDiffusion, BernoulliDiffusion, Denoise, ModalDenoise, GCNModel
 from DataHandler import DataHandler
 import numpy as np
 from Utils.Utils import *
@@ -17,6 +17,7 @@ class Coach:
 		self.handler = handler
 		self.knn_k = 10
 		self.sparse = True
+		self.modal_fusion = False
 
 		print('USER', args.user, 'ITEM', args.item)
 		print('NUM OF INTERACTIONS', self.handler.trnLoader.dataset.__len__())
@@ -66,14 +67,15 @@ class Coach:
 	def prepareModel(self):
 		# 主模型：进行图卷积和对比学习的模型
 		if args.data == 'tiktok':
-			self.model = GCNModel(self.handler.image_feats.detach(), self.handler.text_feats.detach(), self.handler.audio_feats.detach()).cuda()
+			self.model = GCNModel(self.handler.image_feats.detach(), self.handler.text_feats.detach(), self.handler.audio_feats.detach(), modal_fusion=self.modal_fusion).cuda()
 		else:
-			self.model = GCNModel(self.handler.image_feats.detach(), self.handler.text_feats.detach()).cuda()
+			self.model = GCNModel(self.handler.image_feats.detach(), self.handler.text_feats.detach(), modal_fusion=self.modal_fusion).cuda()
 		self.opt = torch.optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=0)
 
 		# 扩散模型：辅助模型，用来进行生成特征和交互图，计算扩散损失 
 		# TODO: 这里还是原本的DDPM，用于生成密集的密集型特征，但是对于交互矩阵等稀疏型特征，我们可以设计一种新的稀疏型Diffusion: Sparse Diffusion 
 		self.diffusion_model = GaussianDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda() 
+		# self.diffusion_model = BernoulliDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda()
 		
 		# 扩散模型中的降噪模型，用于预测反向生成的噪音
 		out_dims = eval(args.dims) + [args.item]
@@ -182,6 +184,7 @@ class Coach:
 				image_batch, text_batch, audio_batch  = data  
 				image_batch, text_batch, audio_batch = image_batch.cuda(), text_batch.cuda(), audio_batch.cuda()
 				
+				
 			else:
 				image_batch, text_batch  = data 
 				image_batch, text_batch = image_batch.cuda(), text_batch.cuda()
@@ -239,6 +242,17 @@ class Coach:
 		with torch.no_grad():
 			'''
 				反向推理生成多模态统一表征, 和 Item-Item Graph Inference
+					image_batch.shape: torch.Size([1024, 128]) denoised_image_batch.shape: torch.Size([1024, 128])
+					text_batch.shape: torch.Size([1024, 768]) denoised_text_batch.shape: torch.Size([1024, 768])
+					audio_batch.shape: torch.Size([1024, 128]) denoised_audio_batch.shape: torch.Size([1024, 128])
+
+					self.image_modal_diffusion_representation.shape: torch.Size([6710, 128])
+					self.text_modal_diffusion_representation.shape: torch.Size([6710, 768])
+
+					self.image_II_matrix: tensor(indices=tensor([[   0,    0,    0,  ..., 6709, 6709, 6709],
+														[   0, 5877, 1526,  ...,  327, 1313,  338]]),
+										values=tensor([0.1697, 0.1057, 0.0953,  ..., 0.0883, 0.0927, 0.0872]),
+										device='cuda:0', size=(6710, 6710), nnz=67100, layout=torch.sparse_coo)
 			'''
 
 			image_modal_diffusion_representation_list = []
@@ -253,14 +267,18 @@ class Coach:
 				else:
 					image_batch, text_batch  = data 
 					image_batch, text_batch = image_batch.cuda(), text_batch.cuda()
-
+				#print("text_batch:.shape", text_batch.shape)
 				# 生成的图像batch
 				denoised_image_batch = self.diffusion_model.p_sample(self.image_modal_denoise_model, image_batch, args.sampling_steps, args.sampling_noise)
+				# print("image_batch.shape:", image_batch.shape, "denoised_image_batch.shape:", denoised_image_batch.shape)
 				# 生成的文本batch
-				denoised_text_batch = self.diffusion_model.p_sample(self.text_modal_denoise_model, text_batch, args.sampling_steps, args.sampling_noise)				
+				denoised_text_batch = self.diffusion_model.p_sample(self.text_modal_denoise_model, text_batch, args.sampling_steps, args.sampling_noise)		
+				#print("denoised_text_batch.shape:", denoised_text_batch.shape)
+				# print("text_batch.shape:", text_batch.shape, "denoised_text_batch.shape:", denoised_text_batch.shape)		
 				# 生成的音频batch
 				if args.data == 'tiktok':
 					denoised_audio_batch = self.diffusion_model.p_sample(self.audio_modal_denoise_model, audio_batch, args.sampling_steps, args.sampling_noise)
+					# print("audio_batch.shape:", image_batch.shape, "denoised_audio_batch.shape:", denoised_image_batch.shape)
 
 				image_modal_diffusion_representation_list.append(denoised_image_batch)
 				text_modal_diffusion_representation_list.append(denoised_text_batch)
@@ -270,13 +288,29 @@ class Coach:
 			# 生成Item模态特征表征 TODO: 还可以做点其他的变换
 			self.image_modal_diffusion_representation = torch.concat(image_modal_diffusion_representation_list)
 			self.text_modal_diffusion_representation = torch.concat(text_modal_diffusion_representation_list)
+
+			# print("self.image_modal_diffusion_representation.shape:", self.image_modal_diffusion_representation.shape)
+			# print("self.text_modal_diffusion_representation.shape:", self.text_modal_diffusion_representation.shape)
 			# 生成Item2Item Graph
 			self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_diffusion_representation)
 			self.text_II_matrix = self.buildItem2ItemMatrix(self.text_modal_diffusion_representation)
+			# print("self.image_II_matrix:", self.image_II_matrix)
 			if args.data == 'tiktok':
 							self.audio_modal_diffusion_representation = torch.concat(audio_modal_diffusion_representation_list)
 							self.audio_II_matrix = self.buildItem2ItemMatrix(self.audio_modal_diffusion_representation)
+							self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix + self.audio_II_matrix
+			else:
+				self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix
 
+			'''
+				self.image_II_matrix.shape: torch.Size([6710, 6710])
+				self.text_II_matrix.shape: torch.Size([6710, 6710])
+				self.audio_II_matrix.shape: torch.Size([6710, 6710])
+			'''
+			# print("self.image_II_matrix.shape:", self.image_II_matrix.shape)
+			# print("self.text_II_matrix.shape:", self.text_II_matrix.shape)
+			# print("self.audio_II_matrix.shape:",self.audio_II_matrix.shape)
+			
 			log('Generate Multimodal Diffusion Feature Representation Done!')
 
 			log('Generate Multimodal Item Item Graph Done!')
@@ -479,12 +513,12 @@ class Coach:
 				# print("self.audio_UI_matrix:", self.audio_UI_matrix)
 				# print("diffusion_ui_adj:", diffusion_ui_adj)
 				# all_embeddings_users, all_embeddings_items, side_embedding, content_embedding
-				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix) 
+				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix, self.modal_fusion_II_matrix) 
 				#usrEmbeds, itmEmbeds = self.model.forward(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix) # GCN
 			else:
 				# usrEmbeds, itmEmbeds = self.model.forward(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix)
 				diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix  # TODO 这里是暂时这样写的
-				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix)
+				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.modal_fusion_II_matrix)
 
 			# Caculate Loss
 			ancEmbeds = usrEmbeds[ancs]
@@ -574,11 +608,11 @@ class Coach:
 			#usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix)
 			diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
 			# all_embeddings_users, all_embeddings_items, side_embedding, content_embedding
-			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix) 
+			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix, self.modal_fusion_II_matrix) 
 		else:
 			#usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix)
 			diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix  # TODO 这里是暂时这样写的
-			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix)
+			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.modal_fusion_II_matrix)
 
 		# Inference
 		for usr, trnMask in tstLoader:
