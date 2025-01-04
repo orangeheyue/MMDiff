@@ -14,6 +14,8 @@ uniformInit = nn.init.uniform
 class GCNModel(nn.Module):
 	'''
 		Multi-View Diffusion for multimodal recommender system.
+
+
 	'''
 	def __init__(self, image_embedding, text_embedding, audio_embedding=None):
 		super(GCNModel, self).__init__()
@@ -85,12 +87,43 @@ class GCNModel(nn.Module):
             nn.Linear(args.latdim, 1, bias=False)
         )
 
-
+		self.init_modal_weight()
 
 	def init_modal_weight(self):
-		'''
-			初始化模型权重
-		'''	
+		"""
+		初始化模型权重
+		"""
+		# 对图像模态投影层中的线性层权重进行初始化（如果有图像模态嵌入的话）
+		if self.image_embedding is not None:
+			for layer in self.image_modal_project:
+				if isinstance(layer, nn.Linear):
+					nn.init.xavier_uniform_(layer.weight)
+		# 对文本模态投影层中的线性层权重进行初始化（如果有文本模态嵌入的话）
+		if self.text_embedding is not None:
+			for layer in self.text_modal_project:
+				if isinstance(layer, nn.Linear):
+					nn.init.xavier_uniform_(layer.weight)
+		# 对音频模态投影层中的线性层权重进行初始化（如果有音频模态嵌入的话）
+		if self.audio_embedding is not None:
+			for layer in self.audio_modal_project:
+				if isinstance(layer, nn.Linear):
+					nn.init.xavier_uniform_(layer.weight)
+		
+		# 对计算公共表示相关的线性层权重进行初始化
+		for layer in self.caculate_common:
+			if isinstance(layer, nn.Linear):
+				nn.init.xavier_uniform_(layer.weight)
+		
+		# 对各模态的门控相关的线性层权重进行初始化
+		for layer in self.gate_image_modal:
+			if isinstance(layer, nn.Linear):
+				nn.init.xavier_uniform_(layer.weight)
+		for layer in self.gate_text_modal:
+			if isinstance(layer, nn.Linear):
+				nn.init.xavier_uniform_(layer.weight)
+		for layer in self.gate_audio_modal:
+			if isinstance(layer, nn.Linear):
+				nn.init.xavier_uniform_(layer.weight)
 
 	def getItemEmbeds(self):
 		'''
@@ -142,15 +175,40 @@ class GCNModel(nn.Module):
 			original_ui_adj:size=(16018, 16018)
 			diffusion_ui_adj:size=(6710, 6710)
 			TODO: diffusion_ui_adj目前简单的进行融合
+
+			original_ui_adj: tensor(indices=tensor([[    0, 10193, 10695,  ..., 16015, 16016, 16017],
+								[    0,     0,     0,  ..., 16015, 16016, 16017]]),
+				values=tensor([0.2500, 0.1443, 0.0606,  ..., 1.0000, 1.0000, 1.0000]),
+				device='cuda:0', size=(16018, 16018), nnz=135100, layout=torch.sparse_coo) 
+			
+			diffusion_ui_adj: tensor(indices=tensor([[15828,     1,     2,  ..., 16012, 16013, 16016],
+								[    0,     1,     2,  ..., 16012, 16013, 16016]]),
+				values=tensor([0.0148, 1.0000, 1.0000,  ..., 2.0000, 2.0000, 2.0000]),
+				device='cuda:0', size=(16018, 16018), nnz=51910, layout=torch.sparse_coo)
+
+			adj: tensor(indices=tensor([[    0, 10193, 10695,  ..., 16012, 16013, 16016],
+								[    0,     0,     0,  ..., 16012, 16013, 16016]]),
+				values=tensor([0.2500, 0.1443, 0.0606,  ..., 2.0000, 2.0000, 2.0000]),
+				device='cuda:0', size=(16018, 16018), nnz=187010, layout=torch.sparse_coo)
 		'''
 		#print("original_ui_adj:", original_ui_adj, "diffusion_ui_adj:", diffusion_ui_adj)
-		adj = original_ui_adj + diffusion_ui_adj # 
+		adj = original_ui_adj + diffusion_ui_adj #
+		#print("adj:", adj)
+		# adj = original_ui_adj  # 
+
+		# adj1 = original_ui_adj
+		# adj2 = diffusion_ui_adj 
+
 		cat_embedding = torch.cat([self.item_id_embedding.weight, self.user_embedding.weight], dim=0)
 
 		all_embeddings = [cat_embedding]
 		for i in range(self.gcn_layer_num):
-			temp_embeddings = torch.sparse.mm(adj, cat_embedding)
-			cat_embedding = temp_embeddings
+			# temp_embeddings1 = torch.sparse.mm(adj1, cat_embedding)
+			# cat_embedding = temp_embeddings1
+			# all_embeddings += [cat_embedding]
+
+			temp_embeddings2 = torch.sparse.mm(adj, cat_embedding)
+			cat_embedding = temp_embeddings2
 			all_embeddings += [cat_embedding]
 		
 		all_embeddings = torch.stack(all_embeddings, dim=1)
@@ -159,7 +217,8 @@ class GCNModel(nn.Module):
 
 		return content_embedding
 
-	def item_item_GCN(self, original_ui_adj, R, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
+
+	def item_item_GCN(self,R, original_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
 		'''
 			Item-Item GCN
 		'''
@@ -297,7 +356,7 @@ class GCNModel(nn.Module):
 		return ret 
 
 
-	def forward(self,R, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
+	def forward(self, R, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None):
 		'''
 			GCN 前向过程:
 				1. 多模态特征提取与fusion
@@ -313,17 +372,27 @@ class GCNModel(nn.Module):
 				diffusion_ii_text_adj: 扩散模型生成的item-item  text modal graph
 				diffusion_ii_audio_adj: 扩散模型生成的item-item audi modal graph
 
-			
 			Return:
 				User Embedding, Item Embedding
+
+				original_ui_adj: tensor(indices=tensor([[    0, 10193, 10695,  ..., 16015, 16016, 16017],
+							[    0,     0,     0,  ..., 16015, 16016, 16017]]),
+							values=tensor([0.2500, 0.1443, 0.0606,  ..., 1.0000, 1.0000, 1.0000]),
+							device='cuda:0', size=(16018, 16018), nnz=135100, layout=torch.sparse_coo)
+
+				diffusion_ui_adj: tensor(indices=tensor([[10272,     1,     2,  ..., 16012, 16013, 16016],
+									[    0,     1,     2,  ..., 16012, 16013, 16016]]),
+					values=tensor([0.0154, 1.0000, 1.0000,  ..., 2.0000, 2.0000, 2.0000]),
+					device='cuda:0', size=(16018, 16018), nnz=51910, layout=torch.sparse_coo)
 		'''
 		# 多模态特征提取与fusion
-	
+		# print("original_ui_adj:", original_ui_adj)
+		# print("diffusion_ui_adj:", diffusion_ui_adj)
 		content_embedding = self.user_item_GCN(original_ui_adj, diffusion_ui_adj)
 		#print("user-item gcn-------->content_embedding.shape", content_embedding.shape) # torch.Size([16018, 64])
 
 		if args.data == 'tiktok':
-			image_ui_embedding, text_ui_embedding, audio_ui_embedding = self.item_item_GCN(original_ui_adj, R, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj)
+			image_ui_embedding, text_ui_embedding, audio_ui_embedding = self.item_item_GCN(R, original_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj)
 
 			sepcial_image_ui_embedding, special_text_ui_embedding, special_audio_ui_embedding, common_embedding = self.gate_attention_fusion(image_ui_embedding, text_ui_embedding, audio_ui_embedding)
 			image_prefer_embedding = self.gate_image_modal(content_embedding) 
@@ -337,7 +406,7 @@ class GCNModel(nn.Module):
 			side_embedding = (sepcial_image_ui_embedding + special_text_ui_embedding + special_audio_ui_embedding + common_embedding) / 4
 			all_embedding = content_embedding + side_embedding
 		else:
-			image_ui_embedding, text_ui_embedding = self.item_item_GCN(original_ui_adj, R, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None)
+			image_ui_embedding, text_ui_embedding = self.item_item_GCN(R, original_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None)
 			sepcial_image_ui_embedding, special_text_ui_embedding, common_embedding = self.gate_attention_fusion(image_ui_embedding, text_ui_embedding, audio_ui_embedding=None)
 			image_prefer_embedding = self.gate_image_modal(content_embedding) 
 			text_prefer_embedding = self.gate_text_modal(content_embedding) 
@@ -867,8 +936,8 @@ class GaussianDiffusion(nn.Module):
 		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
 		model_output = model(x_t, ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
 
-		mse = self.mean_flat((x_start - model_output) ** 2)
-
+		# mse = self.mean_flat((x_start - model_output) ** 2)
+		mse = self.mean_flat((noise - model_output) ** 2)
 		weight = self.SNR(ts - 1) - self.SNR(ts)
 		weight = torch.where((ts == 0), 1.0, weight)
 
