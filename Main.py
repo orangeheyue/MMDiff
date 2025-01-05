@@ -12,6 +12,7 @@ import random
 import setproctitle
 from scipy.sparse import coo_matrix
 
+
 class Coach:
 	def __init__(self, handler):
 		self.handler = handler
@@ -188,8 +189,8 @@ class Coach:
 			else:
 				image_batch, text_batch  = data 
 				image_batch, text_batch = image_batch.cuda(), text_batch.cuda()
-
-			#print("image_batch.shape:", image_batch.shape, "text_batch.shape:", text_batch.shape, "audio_batch.shape:", audio_batch.shape)
+			# print("image_batch.shape:", image_batch.shape, "text_batch.shape:", text_batch.shape) #Baby:image_batch.shape: torch.Size([1024, 4096]) text_batch.shape: torch.Size([1024, 1024])
+			# print("image_batch.shape:", image_batch.shape, "text_batch.shape:", text_batch.shape, "audio_batch.shape:", audio_batch.shape)
 			self.image_modal_denoise_optimizer.zero_grad()
 			self.text_modal_denoise_optimizer.zero_grad()
 			if args.data == 'tiktok':
@@ -208,20 +209,24 @@ class Coach:
 				x_start=text_batch 
 			)
 			#print("audio_batch.shape:", audio_batch.shape)
-			audio_modal_diffusion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
+			if args.data == 'tiktok':
+				audio_modal_diffusion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
 				model=self.audio_modal_denoise_model,
 				x_start=audio_batch
 			)
 
 			image_modal_difussion_loss = image_modal_difussion_loss.mean()
 			text_modal_diffusion_loss = text_modal_diffusion_loss.mean()
-			audio_modal_diffusion_loss = audio_modal_diffusion_loss.mean()
+
 
 			epDiLoss_image_modal += image_modal_difussion_loss.item() 
 			epDiLoss_text_modal += text_modal_diffusion_loss.item() 
-			epDiLoss_audio_modal += audio_modal_diffusion_loss.item()
+
 
 			if args.data == 'tiktok':
+				audio_modal_diffusion_loss = audio_modal_diffusion_loss.mean()
+				epDiLoss_audio_modal += audio_modal_diffusion_loss.item()
+
 				loss = image_modal_difussion_loss + text_modal_diffusion_loss + audio_modal_diffusion_loss
 			else:
 				loss = image_modal_difussion_loss + text_modal_diffusion_loss
@@ -295,12 +300,13 @@ class Coach:
 			self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_diffusion_representation)
 			self.text_II_matrix = self.buildItem2ItemMatrix(self.text_modal_diffusion_representation)
 			# print("self.image_II_matrix:", self.image_II_matrix)
+			self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix
 			if args.data == 'tiktok':
 							self.audio_modal_diffusion_representation = torch.concat(audio_modal_diffusion_representation_list)
 							self.audio_II_matrix = self.buildItem2ItemMatrix(self.audio_modal_diffusion_representation)
 							self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix + self.audio_II_matrix
-			else:
-				self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix
+	
+				
 
 			'''
 				self.image_II_matrix.shape: torch.Size([6710, 6710])
@@ -360,6 +366,7 @@ class Coach:
 			# print("audio_feats.shape:", image_feats.shape)
 
 			diff_loss_image, gc_loss_image = self.diffusion_model.training_losses(self.denoise_model_image, batch_item, iEmbeds, batch_index, image_feats)
+			
 			diff_loss_text, gc_loss_text = self.diffusion_model.training_losses(self.denoise_model_text, batch_item, iEmbeds, batch_index, text_feats)
 			if args.data == 'tiktok':
 				diff_loss_audio, gc_loss_audio = self.diffusion_model.training_losses(self.denoise_model_audio, batch_item, iEmbeds, batch_index, audio_feats)
@@ -379,7 +386,7 @@ class Coach:
 				loss = loss_image + loss_text + loss_audio
 			else:
 				loss = loss_image + loss_text
-
+			loss = loss_image
 			loss.backward()
 
 			self.denoise_opt_image.step()
@@ -507,7 +514,8 @@ class Coach:
 			self.opt.zero_grad()
 
 			if args.data == 'tiktok':
-				diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+				# diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+				diffusion_ui_adj = self.image_UI_matrix
 				# print("self.image_UI_matrix:", self.image_UI_matrix)
 				# print("self.text_UI_matrix", self.text_UI_matrix)
 				# print("self.audio_UI_matrix:", self.audio_UI_matrix)
@@ -518,7 +526,8 @@ class Coach:
 			else:
 				# usrEmbeds, itmEmbeds = self.model.forward(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix)
 				diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix  # TODO 这里是暂时这样写的
-				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.modal_fusion_II_matrix)
+				self.audio_II_matrix = None
+				usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix,self.audio_II_matrix, self.modal_fusion_II_matrix)
 
 			# Caculate Loss
 			ancEmbeds = usrEmbeds[ancs]
@@ -532,6 +541,7 @@ class Coach:
 			# regLoss = self.model.reg_loss() * args.reg
 
 			loss = bprLoss + embLoss + regLoss
+			#loss = bprLoss + embLoss
 			
 			epRecLoss += bprLoss.item()
 			epLoss += loss.item()
