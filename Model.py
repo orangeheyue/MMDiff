@@ -357,7 +357,7 @@ class GCNModel(nn.Module):
 		return ret 
 
 
-	def forward(self, R, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj, diffusion_modal_fusion_ii_matrix):
+	def forward(self, R, original_ui_adj, diffusion_ui_adj, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj=None, diffusion_modal_fusion_ii_matrix=None):
 		'''
 			GCN 前向过程:
 				1. 多模态特征提取与fusion
@@ -687,20 +687,33 @@ class ModalDenoise(nn.Module):
 		self.norm = norm
 		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
 
+		#print("self.in_dims + self.time_emb_dim:", in_dims + self.time_emb_dim) # 4106
+		# print("self.in_dims//2:", self.in_dims//2)  # (1024x1034 and 4116x2053) # 2048
+
+		in_features = (in_dims + self.time_emb_dim) 
+
 		self.down_sampling = nn.Sequential(
-			nn.Linear(in_features=(self.in_dims + self.time_emb_dim), out_features=self.in_dims//2),
-			nn.BatchNorm1d(self.in_dims//2),
+			nn.Linear(in_features=in_features, out_features=self.in_dims // 2),
+			nn.BatchNorm1d(self.in_dims // 2),
 			nn.LeakyReLU(),
 			nn.Dropout(),
-			nn.Linear(in_features=self.in_dims//2, out_features=self.in_dims//4),
+			nn.Linear(in_features=self.in_dims // 2, out_features=self.in_dims//4),
 			nn.BatchNorm1d(self.in_dims//4),
 			nn.LeakyReLU(),
-			nn.Dropout()
+			nn.Dropout(),
+			nn.Linear(in_features=self.in_dims // 4, out_features=self.in_dims//8),
+			nn.BatchNorm1d(self.in_dims//8),
+			nn.LeakyReLU(),
+			nn.Dropout() 
 		)
 
 		self.up_sampling = nn.Sequential(
+			nn.Linear(in_features=self.in_dims//8, out_features=self.in_dims//4),
+			nn.BatchNorm1d(self.in_dims//4),
+			nn.LeakyReLU(),
+			nn.Dropout(),
 			nn.Linear(in_features=self.in_dims//4, out_features=self.in_dims//2),
-			nn.BatchNorm1d(self.in_dims//2),
+			nn.BatchNorm1d(self.in_dims // 2),
 			nn.LeakyReLU(),
 			nn.Dropout(),
 			nn.Linear(in_features=self.in_dims//2, out_features=self.in_dims),
@@ -739,10 +752,10 @@ class ModalDenoise(nn.Module):
 			x = F.normalize(x)
 		if mess_dropout:
 			x = self.drop(x)
-		# print("x.shape:", x.shape) # x.shape: torch.Size([1024, 128])
+		#print("x.shape:", x.shape) # tiktok x.shape: torch.Size([1024, 128])   baby: x.shape: torch.Size([1024, 4096])
 		# print("emb.shape:", emb.shape)
 		h = torch.cat([x, emb], dim=-1)
-		#print("h0.shape:", h.shape) # h1.shape: torch.Size([1024, 138])
+		#print("h0.shape:", h.shape) # h1.shape: torch.Size([1024, 138])  h0.shape: torch.Size([1024, 4106]
 		# dowm sapmling
 		h = self.down_sampling(h)
 		#print("h2.shape:", h.shape) # h2.shape: torch.Size([1024, 32])
@@ -750,6 +763,151 @@ class ModalDenoise(nn.Module):
 		h = self.up_sampling(h)
 		#print("h3.shape:", h.shape) # h3.shape: torch.Size([1024, 128])
 		return h
+
+
+class ModalDenoiseUNet(nn.Module):
+	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
+		'''
+			生成epsilon
+			没有Embedding ?
+		'''
+		super(ModalDenoiseUNet, self).__init__()
+		self.in_dims = in_dims # 128
+		self.out_dims = out_dims # 128
+		self.time_emb_dim = emb_size # 10
+		self.norm = norm
+		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
+		
+		in_features = (in_dims + self.time_emb_dim)
+
+		#print("in_features",in_features)
+		# 下采样
+		self.down_sampling1 = self.mlp(in_features, self.in_dims // 2)
+		self.down_pool1 = nn.MaxPool1d(1)
+
+		self.down_sampling2 = self.mlp(self.in_dims // 2, self.in_dims// 4)
+		self.down_pool2 = nn.MaxPool1d(1)
+
+		self.down_sampling3 = self.mlp(self.in_dims// 4, self.in_dims// 8)
+		self.down_pool3 = nn.MaxPool1d(1)
+		
+		self.middle_connect = self.mlp(self.in_dims //8, self.in_dims // 8)
+
+		# 上采样
+		self.up_sampling1 = self.up_sampling(self.in_dims // 8 + self.in_dims // 8 , self.in_dims // 4)
+		self.up_sampling2 = self.up_sampling(self.in_dims // 4 + self.in_dims // 4, self.in_dims // 2)
+		self.up_sampling3 = self.up_sampling(self.in_dims // 2  +  self.in_dims // 2, self.in_dims)
+
+		self.drop = nn.Dropout(dropout)
+		self.initialize_weights()
+
+	def mlp(self, in_features, out_features):
+		#print("in_features, out_features:", in_features, out_features)
+		return nn.Sequential(
+			nn.Linear(in_features=in_features, out_features=out_features),
+			nn.BatchNorm1d(out_features),
+			nn.LeakyReLU(),
+			nn.Dropout(),
+			nn.Linear(in_features=out_features, out_features=out_features),
+			nn.BatchNorm1d(out_features),
+			nn.LeakyReLU(),
+			nn.Dropout() 
+		)
+
+
+	def up_sampling(self, in_features, out_features):
+		return nn.Sequential(
+			nn.Linear(in_features=in_features, out_features=out_features),
+			nn.BatchNorm1d(out_features),
+			nn.ReLU(inplace=True)
+		)
+	
+
+	def initialize_weights(self):
+		"""
+		对down_sampling、middle_connect和up_sampling中的线性层权重和偏差进行初始化
+		"""
+		# 遍历下采样模块中的线性层进行初始化
+		for down_module in [self.down_sampling1, self.down_sampling2, self.down_sampling3]:
+			for layer in down_module:
+				if isinstance(layer, nn.Linear):
+					size = layer.weight.size()
+					std = np.sqrt(2.0 / (size[0] + size[1]))
+					layer.weight.data.normal_(0.0, std)
+					layer.bias.data.normal_(0.0, 0.001)
+
+		# 对中间连接模块中的线性层进行初始化
+		for layer in self.middle_connect:
+			if isinstance(layer, nn.Linear):
+				size = layer.weight.size()
+				std = np.sqrt(2.0 / (size[0] + size[1]))
+				layer.weight.data.normal_(0.0, std)
+				layer.bias.data.normal_(0.0, 0.001)
+
+		# 遍历上采样模块中的线性层进行初始化
+		for up_module in [self.up_sampling1, self.up_sampling2, self.up_sampling3]:
+			for layer in up_module:
+				if isinstance(layer, nn.Linear):
+					size = layer.weight.size()
+					std = np.sqrt(2.0 / (size[0] + size[1]))
+					layer.weight.data.normal_(0.0, std)
+					layer.bias.data.normal_(0.0, 0.001)
+
+		# 对时间嵌入层的线性层进行初始化
+		for layer in [self.emb_layer]:
+			if isinstance(layer, nn.Linear):
+				size = layer.weight.size()
+				std = np.sqrt(2.0 / (size[0] + size[1]))
+				layer.weight.data.normal_(0.0, std)
+				layer.bias.data.normal_(0.0, 0.001)
+
+
+	def forward(self, x, timesteps, mess_dropout=True):
+		# \\print("x.shape:", x.shape) # x.shape: torch.Size([1024, 128])
+		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda()
+		temp = timesteps[:, None].float() * freqs[None]
+		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)
+		if self.time_emb_dim % 2:
+			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
+		#print("time_emb.shape:", time_emb.shape)
+		emb = self.emb_layer(time_emb)
+		
+		if self.norm:
+			x = F.normalize(x)
+		if mess_dropout:
+			x = self.drop(x)
+	
+		# print("x.shape:", x.shape) # tiktok x.shape: torch.Size([1024, 128])   baby: x.shape: torch.Size([1024, 4096])
+		# print("emb.shape:", emb.shape)
+		h = torch.cat([x, emb], dim=-1)
+		# Down Sample
+		#print("h .shape:", h.shape) #  h .shape: torch.Size([1024, 4106])
+		down_x1 = self.down_sampling1(h)
+		#print('down_x1.shape:', down_x1.shape) # down_x1.shape: torch.Size([1024, 2048])
+		pool_x1 = self.down_pool1(down_x1)
+		#print("pool_x1.shape:", pool_x1.shape) # pool_x1.shape: torch.Size([1024, 2048])
+		down_x2 = self.down_sampling2(pool_x1)
+		#print('down_x2.shape:', down_x2.shape)  # down_x2.shape: torch.Size([1024, 1024])
+		pool_x2 = self.down_pool2(down_x2)
+		#print("pool_x2.shape:", pool_x2.shape) # pool_x2.shape: torch.Size([1024, 1024])
+		down_x3 = self.down_sampling3(pool_x2)
+		#print('down_x3.shape:', down_x3.shape)  # down_x3.shape: torch.Size([1024, 512])
+		pool_x3 = self.down_pool3(down_x3)
+		#print("pool_x3.shape:", pool_x3.shape)  # pool_x3.shape: torch.Size([1024, 512])
+		# Middle 
+		middle = self.middle_connect(pool_x3)
+		#print("middle.shape:", middle.shape) # middle.shape: torch.Size([1024, 512])
+		#print("torch.cat([middle, down_x3].shape:", torch.cat([middle, down_x3], dim=1).shape)
+        # 上采样过程，融合跳跃连接的特征
+		up_x1 = self.up_sampling1(torch.cat([middle, down_x3], dim=1))
+		#print("up_x1.shape:", up_x1.shape)
+		up_x2 = self.up_sampling2(torch.cat([up_x1, down_x2], dim=1))
+		#print("up_x2.shape:", up_x2.shape)
+		up_x3 = self.up_sampling3(torch.cat([up_x2, down_x1], dim=1))
+		#print("up_x3.shape:", up_x3.shape)
+		return up_x3
+	
+
 
 
 class Denoise(nn.Module):
