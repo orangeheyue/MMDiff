@@ -68,8 +68,10 @@ class Coach:
 	def prepareModel(self):
 		# 主模型：进行图卷积和对比学习的模型
 		if args.data == 'tiktok':
+			self.image_embedding, self.text_embedding, self.audio_embedding = self.handler.image_feats.detach(), self.handler.text_feats.detach(), self.handler.audio_feats.detach()
 			self.model = GCNModel(self.handler.image_feats.detach(), self.handler.text_feats.detach(), self.handler.audio_feats.detach(), modal_fusion=self.modal_fusion).cuda()
 		else:
+			self.image_embedding, self.text_embedding = self.handler.image_feats.detach(), self.handler.text_feats.detach()
 			self.model = GCNModel(self.handler.image_feats.detach(), self.handler.text_feats.detach(), modal_fusion=self.modal_fusion).cuda()
 		self.opt = torch.optim.Adam(self.model.parameters(), lr=args.lr, weight_decay=0)
 
@@ -149,9 +151,9 @@ class Coach:
 		feature_embedding = feature_embedding.weight.detach()
 		feature_norm = feature.div(torch.norm(feature_embedding, p=2, dim=-1, keepdim=True))
 		sim_adj = torch.mm(feature_norm, feature_norm.transpose(1, 0))
-		sim_adj = build_knn_normalized_graph(sim_adj, topk=self.knn_k, is_sparse=self.sparse, norm_type='sym')
+		sim_adj_sparse = build_knn_normalized_graph(sim_adj, topk=self.knn_k, is_sparse=self.sparse, norm_type='sym')
 		
-		return sim_adj
+		return sim_adj, sim_adj_sparse
 		
 	def trainEpoch(self):
 		trnLoader = self.handler.trnLoader
@@ -291,23 +293,34 @@ class Coach:
 					audio_modal_diffusion_representation_list.append(denoised_audio_batch)
 
 			# 生成Item模态特征表征 TODO: 还可以做点其他的变换
-			self.image_modal_diffusion_representation = torch.concat(image_modal_diffusion_representation_list)
-			self.text_modal_diffusion_representation = torch.concat(text_modal_diffusion_representation_list)
+			self.image_modal_diffusion_representation = torch.concat(image_modal_diffusion_representation_list) #  torch.Size([6710, 128])
+			self.text_modal_diffusion_representation = torch.concat(text_modal_diffusion_representation_list)   # torch.Size([6710, 768])
 
 			# print("self.image_modal_diffusion_representation.shape:", self.image_modal_diffusion_representation.shape)
 			# print("self.text_modal_diffusion_representation.shape:", self.text_modal_diffusion_representation.shape)
 			# 生成Item2Item Graph
-			self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_diffusion_representation)
-			self.text_II_matrix = self.buildItem2ItemMatrix(self.text_modal_diffusion_representation)
+			# diffusion Item-Item Graph
+			self.image_II_matrix_dense, self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_diffusion_representation)
+			self.text_II_matrix_dense, self.text_II_matrix = self.buildItem2ItemMatrix(self.text_modal_diffusion_representation)
 			# print("self.image_II_matrix:", self.image_II_matrix)
 			self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix
 			if args.data == 'tiktok':
 							self.audio_modal_diffusion_representation = torch.concat(audio_modal_diffusion_representation_list)
-							self.audio_II_matrix = self.buildItem2ItemMatrix(self.audio_modal_diffusion_representation)
+							self.audio_II_matrix_dense, self.audio_II_matrix = self.buildItem2ItemMatrix(self.audio_modal_diffusion_representation)
 							self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix + self.audio_II_matrix
-	
-				
+							self.audio_II_origin_matrix_dense, self.audio_II_origin_materix = self.buildItem2ItemMatrix(self.audio_embedding)
+							
+							self.modal_fusion_II_matrix_dense = self.image_II_matrix_dense + self.text_II_matrix_dense + self.audio_II_matrix_dense
 
+			# origin Item-Item Graph 
+			self.image_II_origin_matrix_dense, self.image_II_origin_materix = self.buildItem2ItemMatrix(self.image_embedding) 
+			self.text_II_origin_matrix_dense, self.text_II_origin_materix = self.buildItem2ItemMatrix(self.text_embedding)	
+
+			self.image_II_origin_matrix_dense += self.image_II_matrix 
+			
+			self.text_II_origin_matrix_dense += self.text_II_matrix 
+			
+			self.audio_II_origin_matrix_dense += self.audio_II_matrix 
 			'''
 				self.image_II_matrix.shape: torch.Size([6710, 6710])
 				self.text_II_matrix.shape: torch.Size([6710, 6710])
@@ -418,22 +431,107 @@ class Coach:
 				batch_item, batch_index = batch
 				batch_item, batch_index = batch_item.cuda(), batch_index.cuda()
 
-				# image
+				# image 
 				denoised_batch = self.diffusion_model.p_sample(self.denoise_model_image, batch_item, args.sampling_steps, args.sampling_noise)
-				top_item, indices_ = torch.topk(denoised_batch, k=args.rebuild_k)
+				# print("denoised_batch.shape", denoised_batch.shape) # denoised_batch.shape torch.Size([1024, 6710])
+				'''
+					denoised_batch tensor([[-0.0065,  0.0102,  0.0007,  ..., -0.0208,  0.0343, -0.0176],
+						[-0.0034,  0.0129, -0.0017,  ..., -0.0308,  0.0387, -0.0202],
+						[-0.0034,  0.0091,  0.0051,  ..., -0.0229,  0.0348, -0.0109],
+						...,
+						[ 0.0031,  0.0098,  0.0059,  ..., -0.0164,  0.0391, -0.0168],
+						[-0.0032,  0.0146, -0.0023,  ..., -0.0251,  0.0329, -0.0150],
+						[ 0.0014,  0.0059, -0.0020,  ..., -0.0235,  0.0317, -0.0109]],
+					device='cuda:0')
 
+					top_item: 
+					tensor([[0.0619, 0.0584, 0.0567,  ..., 0.0518, 0.0499, 0.0493],
+					[0.0667, 0.0618, 0.0604,  ..., 0.0505, 0.0503, 0.0493],
+					[0.0668, 0.0637, 0.0608,  ..., 0.0502, 0.0502, 0.0500],
+					...,
+					[0.0653, 0.0624, 0.0621,  ..., 0.0499, 0.0498, 0.0493],
+					[0.0666, 0.0651, 0.0591,  ..., 0.0543, 0.0512, 0.0511],
+					[0.0644, 0.0603, 0.0576,  ..., 0.0527, 0.0518, 0.0517]],
+					device='cuda:0')
+				 
+				   indices_: 
+				   tensor([[4679, 5724,  964,  ...,  535, 2544, 1084],
+					[5724, 4679, 2106,  ...,  964, 5668,  535],
+					[5724, 4679, 6520,  ..., 4812, 2995,  964],
+					...,
+					[4679, 6520, 5724,  ..., 3543, 2564,  964],
+					[5724, 6520, 4679,  ..., 2995, 2544, 5340],
+					[5724, 6520, 4679,  ..., 1899, 4812, 2106]], device='cuda:0')
+
+
+					self.image_II_matrix.shape: torch.Size([6710, 6710])
+					self.text_II_matrix.shape: torch.Size([6710, 6710])
+					self.audio_II_matrix.shape: torch.Size([6710, 6710])
+
+				mm_value: TODO: 左上三角矩阵
+                tensor([[1.0000, 0.6342, 0.5354, 0.4215, 0.4063, 0.3820, 0.3693],
+                        [1.0000, 0.4390, 0.4328, 0.3986, 0.3962, 0.3823, 0.3818],
+                        [1.0000, 0.4058, 0.3858, 0.3679, 0.3567, 0.3337, 0.3334],
+                        [1.0000, 0.4111, 0.3943, 0.3858, 0.3618, 0.3527, 0.3473],
+                        [1.0000, 0.3759, 0.3712, 0.3680, 0.3475, 0.3469, 0.3200]],
+                    device='cuda:0')
+                mm_indices: 
+                tensor([[ 102,   93,  553, 3404, 6761, 1992,  426],
+                        [   9, 2662, 6624, 1217, 4855, 1609,  166],
+                        [ 171,  353, 2161,  304, 4680, 6501,  495],
+                        [ 187, 4544,  572, 3441, 6797, 2323, 5547],
+                        [  29, 2801, 3917, 5032, 1382, 5644, 2307]], device='cuda:0')
+
+                mm_value.flatten(): 
+                tensor([1.0000, 0.6342, 0.5354, 0.4215, 0.4063, 0.3820, 0.3693, 1.0000, 0.4390,
+                        0.4328, 0.3986, 0.3962, 0.3823, 0.3818, 1.0000, 0.4058, 0.3858, 0.3679,
+                        0.3567, 0.3337, 0.3334, 1.0000, 0.4111, 0.3943, 0.3858, 0.3618, 0.3527,
+                        0.3473, 1.0000, 0.3759, 0.3712, 0.3680, 0.3475, 0.3469, 0.3200],
+                    device='cuda:0')
+				'''
+				# print("args.rebuild_k:", args.rebuild_k)
+				top_item, indices_ = torch.topk(denoised_batch, k=args.rebuild_k)
+				#print("top_item:", top_item, "indices_:", indices_)
+				#print("batch_index.shape[0]:", batch_index.shape[0], "indices_[i].shape[0]:", indices_[i].shape[0]) # batch_index.shape[0]: 1024 indices_[i].shape[0]: 10
+				
+		
+				# hyper parameters：
+				self.latent_interest_topk = args.rebuild_k
+				self.high_order_latent_interest_topk = self.latent_interest_topk + 2
 				for i in range(batch_index.shape[0]):
-					for j in range(indices_[i].shape[0]): 
-						u_list_image.append(int(batch_index[i].cpu().numpy()))
-						i_list_image.append(int(indices_[i][j].cpu().numpy()))
-						edge_list_image.append(1.0)
+					# 每一人对每一个物品
+					# a user id 
+					latent_intertest_items = indices_[i] # 潜在感兴趣的物品id
+					#print("int(batch_index[i].cpu().numpy():", int(batch_index[i].cpu().numpy()), "int(indices_[i][j].cpu().numpy()):", indices_[i][j].cpu().numpy())
+					# 计算当前这个用户10个潜在感兴趣的物品中的相似度
+					#print("latent_intertest_items:", latent_intertest_items) # tensor([4679, 5724,  964, 6520, 5668, 2106, 3135,  535, 2544, 1084], device='cuda:0')
+					#print("self.image_II_matrix_dense.shape:", self.image_II_matrix_dense.shape)
+					#print("self.image_II_matrix[latent_intertest_items]:", self.image_modal_diffusion_representation[latent_intertest_items])
+					latent_multimodal_items_sim =  torch.multiply(self.image_II_origin_matrix_dense[latent_intertest_items], self.text_II_origin_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
+					if args.data == 'tiktok': 
+						latent_multimodal_items_sim = torch.multiply(latent_multimodal_items_sim, self.audio_II_origin_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
+					# 根据当前这个用户10个潜在感兴趣的物品中的相似度找到Top的物品：(历史真实交互的物品的扩散降噪生成后的平均概率作为阈值， 只要不小于该阈值，则认为扩散生成的其他物品为当前用户潜在感兴趣的物品)
+					latent_multimodal_items_prob, latent_multimodal_items_index = torch.topk(latent_multimodal_items_sim, self.latent_interest_topk, dim=-1) # (10, 10)
+					high_order_items_prob, high_order_items_index = torch.topk(latent_multimodal_items_prob.flatten(), self.high_order_latent_interest_topk)
+					# TODO：筛选策略
+					high_order_latent_interest_items = latent_multimodal_items_index.flatten()[high_order_items_index]
+					for item in high_order_latent_interest_items:
+						u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
+						i_list_image.append(int(item.item()))
+						edge_list_image.append(1.0) 
+
+
+					# for j in range(indices_[i].shape[0]): 
+					# 	u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
+					# 	i_list_image.append(int(indices_[i][j].cpu().numpy())) # item id 5724
+					# 	edge_list_image.append(1.0) 
 
 				# text
 				denoised_batch = self.diffusion_model.p_sample(self.denoise_model_text, batch_item, args.sampling_steps, args.sampling_noise)
-				top_item, indices_ = torch.topk(denoised_batch, k=args.rebuild_k)
-
+				top_item, indices_ = torch.topk(denoised_batch, k=args.rebuild_k)			
 				for i in range(batch_index.shape[0]):
 					for j in range(indices_[i].shape[0]): 
+
 						u_list_text.append(int(batch_index[i].cpu().numpy()))
 						i_list_text.append(int(indices_[i][j].cpu().numpy()))
 						edge_list_text.append(1.0)
@@ -514,7 +612,7 @@ class Coach:
 			self.opt.zero_grad()
 
 			if args.data == 'tiktok':
-				# diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+				#diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
 				diffusion_ui_adj = self.image_UI_matrix
 				# print("self.image_UI_matrix:", self.image_UI_matrix)
 				# print("self.text_UI_matrix", self.text_UI_matrix)
