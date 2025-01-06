@@ -41,26 +41,44 @@ class GCNModel(nn.Module):
 
 		# modal feature projection
 		if self.image_embedding is not None:
+			self.image_residual_project = nn.Sequential(
+				nn.Linear(in_features=self.image_embedding.shape[1], out_features=self.image_embedding.shape[1]),
+				nn.BatchNorm1d(self.image_embedding.shape[1]),
+				nn.ReLU(),
+				nn.Dropout(),
+			)
 			self.image_modal_project = nn.Sequential(
 				nn.Linear(in_features=self.image_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU(),
+				nn.ReLU(),
 				nn.Dropout()
 			)
 
 		if self.text_embedding is not None:
+			self.text_residual_project = nn.Sequential(
+				nn.Linear(in_features=self.text_embedding.shape[1], out_features=self.text_embedding.shape[1]),
+				nn.BatchNorm1d(self.text_embedding.shape[1]),
+				nn.ReLU(),
+				nn.Dropout(),
+			)
 			self.text_modal_project = nn.Sequential(
 				nn.Linear(in_features=self.text_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU(),
+				nn.ReLU(),
 				nn.Dropout()
 			)
 
 		if self.audio_embedding is not None:
+			self.audio_residual_project = nn.Sequential(
+				nn.Linear(in_features=self.audio_embedding.shape[1], out_features=self.audio_embedding.shape[1]),
+				nn.BatchNorm1d(self.audio_embedding.shape[1]),
+				nn.ReLU(),
+				nn.Dropout(),
+			)
 			self.audio_modal_project = nn.Sequential(
 				nn.Linear(in_features=self.audio_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU(),
+				nn.ReLU(),
 				nn.Dropout()
 			)
 
@@ -126,6 +144,21 @@ class GCNModel(nn.Module):
 			if isinstance(layer, nn.Linear):
 				nn.init.xavier_uniform_(layer.weight)
 
+		# 残差模块
+		for layer in  self.image_residual_project:
+				if isinstance(layer, nn.Linear):
+					nn.init.xavier_uniform_(layer.weight)
+		# 残差模块
+		for layer in  self.text_residual_project:
+				if isinstance(layer, nn.Linear):
+					nn.init.xavier_uniform_(layer.weight)
+		# 残差模块
+		if self.audio_embedding is not None:
+			for layer in  self.audio_residual_project:
+					if isinstance(layer, nn.Linear):
+						nn.init.xavier_uniform_(layer.weight)
+
+		
 	def getItemEmbeds(self):
 		'''
 			获取Item embedding
@@ -143,7 +176,10 @@ class GCNModel(nn.Module):
 			获取图像模态特征
 		'''
 		if self.image_embedding is not None:
-			image_modal_feature = self.image_modal_project(self.image_embedding)
+			x = self.image_embedding 
+			out = self.image_residual_project(self.image_embedding)
+			out = x + out 
+			image_modal_feature = self.image_modal_project(out)
 		return image_modal_feature
 
 	def getTextFeats(self):
@@ -151,7 +187,10 @@ class GCNModel(nn.Module):
 			获取文本模态特征
 		'''
 		if self.text_embedding is not None:
-			text_modal_feature = self.text_modal_project(self.text_embedding)
+			x = self.text_embedding 
+			out = self.text_residual_project(self.text_embedding)
+			out = x + out 
+			text_modal_feature = self.text_modal_project(out)
 		return text_modal_feature
 	
 	def getAudioFeats(self):
@@ -159,9 +198,13 @@ class GCNModel(nn.Module):
 			获取音频模态特征
 		'''
 		if self.audio_embedding is not None:
-			audio_modal_feature = self.audio_modal_project(self.audio_embedding)
-		return audio_modal_feature 
+			x = self.audio_embedding 
+			out = self.audio_residual_project(self.audio_embedding)
+			out = x + out 
+			audio_modal_feature = self.audio_modal_project(out)
+		return audio_modal_feature
 	
+
 	def multimodal_feature_fusion_adj(self, diffusion_ii_image_adj, diffusion_ii_text_adj, diffusion_ii_audio_adj):
 		'''
 			多模态特征提取与fusion
