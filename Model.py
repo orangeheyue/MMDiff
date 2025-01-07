@@ -23,7 +23,7 @@ class GCNModel(nn.Module):
 		self.sparse = True
 		self.gcn_layer_num = 2
 		self.edgeDropper = SpAdjDropEdge(args.keepRate)
-		self.reg_weight =  1e-04
+		self.reg_weight = 1e-5
 		self.batch_size = 1024
 		self.modal_fusion = modal_fusion
 
@@ -42,44 +42,38 @@ class GCNModel(nn.Module):
 		# modal feature projection
 		if self.image_embedding is not None:
 			self.image_residual_project = nn.Sequential(
-				nn.Linear(in_features=self.image_embedding.shape[1], out_features=self.image_embedding.shape[1]),
-				nn.BatchNorm1d(self.image_embedding.shape[1]),
-				nn.ReLU(),
-				nn.Dropout(),
-			)
-			self.image_modal_project = nn.Sequential(
 				nn.Linear(in_features=self.image_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.ReLU(),
-				nn.Dropout()
+				nn.LeakyReLU()
+			)
+			self.image_modal_project = nn.Sequential(
+				nn.Linear(in_features=args.latdim, out_features=args.latdim),
+				nn.BatchNorm1d(args.latdim),
+				nn.LeakyReLU()
 			)
 
 		if self.text_embedding is not None:
 			self.text_residual_project = nn.Sequential(
-				nn.Linear(in_features=self.text_embedding.shape[1], out_features=self.text_embedding.shape[1]),
-				nn.BatchNorm1d(self.text_embedding.shape[1]),
-				nn.ReLU(),
-				nn.Dropout(),
-			)
-			self.text_modal_project = nn.Sequential(
 				nn.Linear(in_features=self.text_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.ReLU(),
-				nn.Dropout()
+				nn.LeakyReLU()
+			)
+			self.text_modal_project = nn.Sequential(
+				nn.Linear(in_features=args.latdim, out_features=args.latdim),
+				nn.BatchNorm1d(args.latdim),
+				nn.LeakyReLU()
 			)
 
 		if self.audio_embedding is not None:
 			self.audio_residual_project = nn.Sequential(
-				nn.Linear(in_features=self.audio_embedding.shape[1], out_features=self.audio_embedding.shape[1]),
-				nn.BatchNorm1d(self.audio_embedding.shape[1]),
-				nn.ReLU(),
-				nn.Dropout(),
-			)
-			self.audio_modal_project = nn.Sequential(
 				nn.Linear(in_features=self.audio_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.ReLU(),
-				nn.Dropout()
+				nn.LeakyReLU()
+			)
+			self.audio_modal_project = nn.Sequential(
+				nn.Linear(in_features=args.latdim, out_features=args.latdim),
+				nn.BatchNorm1d(args.latdim),
+				nn.LeakyReLU()
 			)
 
 		self.softmax = nn.Softmax(dim=-1)
@@ -176,10 +170,9 @@ class GCNModel(nn.Module):
 			获取图像模态特征
 		'''
 		if self.image_embedding is not None:
-			x = self.image_embedding 
-			out = self.image_residual_project(self.image_embedding)
-			out = x + out 
-			image_modal_feature = self.image_modal_project(out)
+			x = self.image_residual_project(self.image_embedding)
+			image_modal_feature = self.image_modal_project(x)
+			image_modal_feature += x
 		return image_modal_feature
 
 	def getTextFeats(self):
@@ -187,10 +180,9 @@ class GCNModel(nn.Module):
 			获取文本模态特征
 		'''
 		if self.text_embedding is not None:
-			x = self.text_embedding 
-			out = self.text_residual_project(self.text_embedding)
-			out = x + out 
-			text_modal_feature = self.text_modal_project(out)
+			x = self.text_residual_project(self.text_embedding)
+			text_modal_feature = self.text_modal_project(x)
+			text_modal_feature += x
 		return text_modal_feature
 	
 	def getAudioFeats(self):
@@ -198,10 +190,9 @@ class GCNModel(nn.Module):
 			获取音频模态特征
 		'''
 		if self.audio_embedding is not None:
-			x = self.audio_embedding 
-			out = self.audio_residual_project(self.audio_embedding)
-			out = x + out 
-			audio_modal_feature = self.audio_modal_project(out)
+			x = self.audio_residual_project(self.audio_embedding)
+			audio_modal_feature = self.audio_modal_project(x)
+			audio_modal_feature += x
 		return audio_modal_feature
 	
 
@@ -236,14 +227,14 @@ class GCNModel(nn.Module):
 				device='cuda:0', size=(16018, 16018), nnz=187010, layout=torch.sparse_coo)
 		'''
 		#print("original_ui_adj:", original_ui_adj, "diffusion_ui_adj:", diffusion_ui_adj)
-		adj = original_ui_adj + diffusion_ui_adj #
+		adj = original_ui_adj + diffusion_ui_adj  #
 		#print("adj:", adj)
 		# adj = original_ui_adj  # 
 
 		# adj1 = original_ui_adj
 		# adj2 = diffusion_ui_adj 
 
-		cat_embedding = torch.cat([self.item_id_embedding.weight, self.user_embedding.weight], dim=0)
+		cat_embedding = torch.cat([self.user_embedding.weight, self.item_id_embedding.weight], dim=0)
 
 		all_embeddings = [cat_embedding]
 		for i in range(self.gcn_layer_num):
@@ -258,6 +249,7 @@ class GCNModel(nn.Module):
 		all_embeddings = torch.stack(all_embeddings, dim=1)
 		all_embeddings = all_embeddings.mean(dim=1, keepdim=False)
 		content_embedding = all_embeddings
+		#print("content_embedding:", content_embedding)
 
 		return content_embedding
 
@@ -360,8 +352,8 @@ class GCNModel(nn.Module):
 		assert anc_embeds.shape == neg_embeds.shape, "用户嵌入与负样本嵌入维度应匹配"
 
 		# 计算正样本和负样本的得分：
-		pos_scores = torch.sum(torch.mul(anc_embeds, pos_embeds), dim=1)  # 计算用户与正样本物品的点积之和，作为正样本得分，形状为 [batch_size]
-		neg_scores = torch.sum(torch.mul(anc_embeds, neg_embeds), dim=1)  # 计算用户与负样本物品的点积之和，作为负样本得分，形状为 [batch_size]
+		pos_scores = torch.sum(torch.mul(anc_embeds, pos_embeds), dim=-1)  # 计算用户与正样本物品的点积之和，作为正样本得分，形状为 [batch_size]
+		neg_scores = torch.sum(torch.mul(anc_embeds, neg_embeds), dim=-1)  # 计算用户与负样本物品的点积之和，作为负样本得分，形状为 [batch_size]
 
 		# 计算BPR损失
 		diff_scores = pos_scores - neg_scores
@@ -378,12 +370,11 @@ class GCNModel(nn.Module):
 		return bpr_loss, emb_loss, reg_loss
 	
 	
-	def infoNCE_loss(self, view1, view2, nodes, temperature):
+	def infoNCE_loss(self, view1, view2,  temperature):
 		'''
 			InfoNCE loss
 		'''
 		view1, view2 = F.normalize(view1, dim=1), F.normalize(view2, dim=1)
-		view1, view2 = view1[nodes], view2[nodes]
 		pos_score = torch.sum((view1 * view2), dim=-1)
 		pos_score = torch.exp(pos_score / temperature)
 
@@ -715,7 +706,7 @@ class SpAdjDropEdge(nn.Module):
 
 
 class ModalDenoise(nn.Module):
-	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
+	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.2):
 		'''
 			生成epsilon
 			没有Embedding ?
@@ -739,31 +730,33 @@ class ModalDenoise(nn.Module):
 			nn.Linear(in_features=in_features, out_features=self.in_dims // 2),
 			nn.BatchNorm1d(self.in_dims // 2),
 			nn.LeakyReLU(),
-			nn.Dropout(),
+			nn.Dropout(0.3),
 			nn.Linear(in_features=self.in_dims // 2, out_features=self.in_dims//4),
 			nn.BatchNorm1d(self.in_dims//4),
 			nn.LeakyReLU(),
-			nn.Dropout(),
+			nn.Dropout(0.3),
 			nn.Linear(in_features=self.in_dims // 4, out_features=self.in_dims//8),
 			nn.BatchNorm1d(self.in_dims//8),
 			nn.LeakyReLU(),
-			nn.Dropout() 
+			nn.Dropout(0.3)
+
 		)
 
 		self.up_sampling = nn.Sequential(
 			nn.Linear(in_features=self.in_dims//8, out_features=self.in_dims//4),
 			nn.BatchNorm1d(self.in_dims//4),
 			nn.LeakyReLU(),
-			nn.Dropout(),
+			nn.Dropout(0.3),
 			nn.Linear(in_features=self.in_dims//4, out_features=self.in_dims//2),
 			nn.BatchNorm1d(self.in_dims // 2),
 			nn.LeakyReLU(),
-			nn.Dropout(),
+			nn.Dropout(0.3),
 			nn.Linear(in_features=self.in_dims//2, out_features=self.in_dims),
 			nn.BatchNorm1d(self.in_dims),
 			nn.LeakyReLU(),
-			nn.Dropout()
+			nn.Dropout(0.3)
 		)
+
 
 		
 		self.drop = nn.Dropout(dropout)
@@ -804,6 +797,11 @@ class ModalDenoise(nn.Module):
 		#print("h2.shape:", h.shape) # h2.shape: torch.Size([1024, 32])
 		# up sampling
 		h = self.up_sampling(h)
+
+		# x += h 
+		# h = torch.cat([x, emb], dim=-1)
+		# h = self.down_sampling(h)
+		# h = self.up_sampling(h)
 		#print("h3.shape:", h.shape) # h3.shape: torch.Size([1024, 128])
 		return h
 
