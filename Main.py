@@ -16,7 +16,7 @@ from scipy.sparse import coo_matrix
 class Coach:
 	def __init__(self, handler):
 		self.handler = handler
-		self.knn_k = 10
+		self.knn_k = 5 # TODO?
 		self.sparse = True
 		self.modal_fusion = False
 
@@ -155,6 +155,7 @@ class Coach:
 		
 		return sim_adj, sim_adj_sparse
 		
+
 	def trainEpoch(self):
 		trnLoader = self.handler.trnLoader
 		trnLoader.dataset.negSampling()
@@ -172,7 +173,6 @@ class Coach:
 		steps = trnLoader.dataset.__len__() // args.batch
 
 		diffusionLoader = self.handler.diffusionLoader
-
 		multimodalFeatureLoader = self.handler.multimodalFeatureLoader
 
 		'''
@@ -296,31 +296,44 @@ class Coach:
 			self.image_modal_diffusion_representation = torch.concat(image_modal_diffusion_representation_list) #  torch.Size([6710, 128])
 			self.text_modal_diffusion_representation = torch.concat(text_modal_diffusion_representation_list)   # torch.Size([6710, 768])
 
+			#print("self.image_embedding:", self.image_embedding)
+			# print("image_modal_diffusion_representation:", self.image_modal_diffusion_representation)
+			# print("nn.Embedding.from_pretrained(self.v_feat, freeze=False):", torch.nn.Embedding.from_pretrained(self.image_embedding, freeze=False).weight.detach())
 			# print("self.image_modal_diffusion_representation.shape:", self.image_modal_diffusion_representation.shape)
 			# print("self.text_modal_diffusion_representation.shape:", self.text_modal_diffusion_representation.shape)
 			# 生成Item2Item Graph
 			# diffusion Item-Item Graph
+			self.image_modal_diffusion_representation += self.image_embedding
+			self.text_modal_diffusion_representation += self.text_embedding 
+			
+
 			self.image_II_matrix_dense, self.image_II_matrix = self.buildItem2ItemMatrix(self.image_modal_diffusion_representation)
 			self.text_II_matrix_dense, self.text_II_matrix = self.buildItem2ItemMatrix(self.text_modal_diffusion_representation)
+
+		
 			# print("self.image_II_matrix:", self.image_II_matrix)
 			self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix
 			if args.data == 'tiktok':
 							self.audio_modal_diffusion_representation = torch.concat(audio_modal_diffusion_representation_list)
+							self.audio_modal_diffusion_representation += self.audio_embedding
 							self.audio_II_matrix_dense, self.audio_II_matrix = self.buildItem2ItemMatrix(self.audio_modal_diffusion_representation)
-							self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix + self.audio_II_matrix
-							self.audio_II_origin_matrix_dense, self.audio_II_origin_materix = self.buildItem2ItemMatrix(self.audio_embedding)
 							
+							self.modal_fusion_II_matrix = self.image_II_matrix + self.text_II_matrix + self.audio_II_matrix
 							self.modal_fusion_II_matrix_dense = self.image_II_matrix_dense + self.text_II_matrix_dense + self.audio_II_matrix_dense
 
 			# origin Item-Item Graph 
 			self.image_II_origin_matrix_dense, self.image_II_origin_materix = self.buildItem2ItemMatrix(self.image_embedding) 
 			self.text_II_origin_matrix_dense, self.text_II_origin_materix = self.buildItem2ItemMatrix(self.text_embedding)	
+			self.audio_II_origin_matrix_dense, self.audio_II_origin_materix = self.buildItem2ItemMatrix(self.audio_embedding)	
 
-			self.image_II_origin_matrix_dense += self.image_II_matrix 
+			self.image_II_matrix += self.image_II_origin_materix
+			self.text_II_matrix += self.text_II_origin_materix
+			self.audio_II_matrix += self.audio_II_origin_materix 
+			# self.image_II_origin_matrix_dense += self.image_II_matrix 
 			
-			self.text_II_origin_matrix_dense += self.text_II_matrix 
+			# self.text_II_origin_matrix_dense += self.text_II_matrix 
 			
-			self.audio_II_origin_matrix_dense += self.audio_II_matrix 
+			# self.audio_II_origin_matrix_dense += self.audio_II_matrix 
 			'''
 				self.image_II_matrix.shape: torch.Size([6710, 6710])
 				self.text_II_matrix.shape: torch.Size([6710, 6710])
@@ -495,36 +508,36 @@ class Coach:
 				#print("batch_index.shape[0]:", batch_index.shape[0], "indices_[i].shape[0]:", indices_[i].shape[0]) # batch_index.shape[0]: 1024 indices_[i].shape[0]: 10
 				
 		
-				# hyper parameters：
-				self.latent_interest_topk = args.rebuild_k
-				self.high_order_latent_interest_topk = self.latent_interest_topk + 2
+				# # hyper parameters：
+				# self.latent_interest_topk = args.rebuild_k
+				# self.high_order_latent_interest_topk = self.latent_interest_topk + 2
 				for i in range(batch_index.shape[0]):
-					# 每一人对每一个物品
-					# a user id 
-					latent_intertest_items = indices_[i] # 潜在感兴趣的物品id
-					#print("int(batch_index[i].cpu().numpy():", int(batch_index[i].cpu().numpy()), "int(indices_[i][j].cpu().numpy()):", indices_[i][j].cpu().numpy())
-					# 计算当前这个用户10个潜在感兴趣的物品中的相似度
-					#print("latent_intertest_items:", latent_intertest_items) # tensor([4679, 5724,  964, 6520, 5668, 2106, 3135,  535, 2544, 1084], device='cuda:0')
-					#print("self.image_II_matrix_dense.shape:", self.image_II_matrix_dense.shape)
-					#print("self.image_II_matrix[latent_intertest_items]:", self.image_modal_diffusion_representation[latent_intertest_items])
-					latent_multimodal_items_sim =  torch.multiply(self.image_II_origin_matrix_dense[latent_intertest_items], self.text_II_origin_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
-					if args.data == 'tiktok': 
-						latent_multimodal_items_sim = torch.multiply(latent_multimodal_items_sim, self.audio_II_origin_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
-					# 根据当前这个用户10个潜在感兴趣的物品中的相似度找到Top的物品：(历史真实交互的物品的扩散降噪生成后的平均概率作为阈值， 只要不小于该阈值，则认为扩散生成的其他物品为当前用户潜在感兴趣的物品)
-					latent_multimodal_items_prob, latent_multimodal_items_index = torch.topk(latent_multimodal_items_sim, self.latent_interest_topk, dim=-1) # (10, 10)
-					high_order_items_prob, high_order_items_index = torch.topk(latent_multimodal_items_prob.flatten(), self.high_order_latent_interest_topk)
-					# TODO：筛选策略
-					high_order_latent_interest_items = latent_multimodal_items_index.flatten()[high_order_items_index]
-					for item in high_order_latent_interest_items:
+				# 	# 每一人对每一个物品
+				# 	# a user id 
+				# 	latent_intertest_items = indices_[i] # 潜在感兴趣的物品id
+				# 	#print("int(batch_index[i].cpu().numpy():", int(batch_index[i].cpu().numpy()), "int(indices_[i][j].cpu().numpy()):", indices_[i][j].cpu().numpy())
+				# 	# 计算当前这个用户10个潜在感兴趣的物品中的相似度
+				# 	#print("latent_intertest_items:", latent_intertest_items) # tensor([4679, 5724,  964, 6520, 5668, 2106, 3135,  535, 2544, 1084], device='cuda:0')
+				# 	#print("self.image_II_matrix_dense.shape:", self.image_II_matrix_dense.shape)
+				# 	#print("self.image_II_matrix[latent_intertest_items]:", self.image_modal_diffusion_representation[latent_intertest_items])
+				# 	latent_multimodal_items_sim =  torch.multiply(self.image_II_matrix_dense[latent_intertest_items], self.text_II_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
+				# 	if args.data == 'tiktok': 
+				# 		latent_multimodal_items_sim = torch.multiply(latent_multimodal_items_sim, self.audio_II_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
+				# 	# 根据当前这个用户10个潜在感兴趣的物品中的相似度找到Top的物品：(历史真实交互的物品的扩散降噪生成后的平均概率作为阈值， 只要不小于该阈值，则认为扩散生成的其他物品为当前用户潜在感兴趣的物品)
+				# 	latent_multimodal_items_prob, latent_multimodal_items_index = torch.topk(latent_multimodal_items_sim, self.latent_interest_topk, dim=-1) # (10, 10)
+				# 	high_order_items_prob, high_order_items_index = torch.topk(latent_multimodal_items_prob.flatten(), self.high_order_latent_interest_topk)
+				# 	# TODO：筛选策略
+				# 	high_order_latent_interest_items = latent_multimodal_items_index.flatten()[high_order_items_index]
+				# 	for item in high_order_latent_interest_items:
+				# 		u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
+				# 		i_list_image.append(int(item.item()))
+				# 		edge_list_image.append(1.0) 
+
+
+					for j in range(indices_[i].shape[0]): 
 						u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
-						i_list_image.append(int(item.item()))
+						i_list_image.append(int(indices_[i][j].cpu().numpy())) # item id 5724
 						edge_list_image.append(1.0) 
-
-
-					# for j in range(indices_[i].shape[0]): 
-					# 	u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
-					# 	i_list_image.append(int(indices_[i][j].cpu().numpy())) # item id 5724
-					# 	edge_list_image.append(1.0) 
 
 				# text
 				denoised_batch = self.diffusion_model.p_sample(self.denoise_model_text, batch_item, args.sampling_steps, args.sampling_noise)
@@ -612,7 +625,7 @@ class Coach:
 			self.opt.zero_grad()
 
 			if args.data == 'tiktok':
-				#diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+				# diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
 				diffusion_ui_adj = self.image_UI_matrix
 				# print("self.image_UI_matrix:", self.image_UI_matrix)
 				# print("self.text_UI_matrix", self.text_UI_matrix)
@@ -632,13 +645,15 @@ class Coach:
 			posEmbeds = itmEmbeds[poss]
 			negEmbeds = itmEmbeds[negs]
 
-			bprLoss, embLoss, regLoss = self.model.bpr_loss(ancEmbeds, posEmbeds, negEmbeds)
+			# bprLoss, embLoss, regLoss = self.model.bpr_loss(ancEmbeds, posEmbeds, negEmbeds)
+			bprLoss, _,  regLoss = self.model.bpr_loss(ancEmbeds, posEmbeds, negEmbeds)
 
 			# scoreDiff = pairPredict(ancEmbeds, posEmbeds, negEmbeds)
 			# bprLoss = - (scoreDiff).sigmoid().log().sum() / args.batch
 			# regLoss = self.model.reg_loss() * args.reg
 
-			loss = bprLoss + embLoss + regLoss
+			# loss = bprLoss + embLoss + regLoss
+			loss = bprLoss + regLoss
 			#loss = bprLoss + embLoss
 			
 			epRecLoss += bprLoss.item()
@@ -649,8 +664,11 @@ class Coach:
 			side_embeds_users, side_embeds_items = torch.split(side_Embeds, [args.user, args.item], dim=0)
 			content_embeds_user, content_embeds_items = torch.split(content_Emebeds, [args.user, args.item], dim=0)
 
-			clLoss = self.model.infoNCE_loss(side_embeds_users, content_embeds_user, ancs, args.temp) +  self.model.infoNCE_loss(side_embeds_items, content_embeds_items, poss, args.temp) 
-			clLoss *= args.ssl_reg
+			# 物品-物品的对比损失
+			clLoss1 = self.model.infoNCE_loss(side_embeds_items[poss], content_embeds_items[poss], args.temp) +  self.model.infoNCE_loss(side_embeds_users[ancs], content_embeds_user[ancs], args.temp) 
+			# 用户-物品的对比损失
+			clLoss2 = self.model.infoNCE_loss(usrEmbeds[ancs], content_embeds_items[poss], args.temp) +  self.model.infoNCE_loss(usrEmbeds[ancs], side_embeds_items[poss], args.temp) 
+			clLoss = clLoss1 * args.ssl_reg + clLoss2 * args.ssl_reg
 
 			# if args.data == 'tiktok':
 			# 	usrEmbeds1, itmEmbeds1, usrEmbeds2, itmEmbeds2, usrEmbeds3, itmEmbeds3 = self.model.forward_cl_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix)
@@ -714,7 +732,8 @@ class Coach:
 
 		if args.data == 'tiktok':
 			#usrEmbeds, itmEmbeds = self.model.forward_MM(self.handler.torchBiAdj, self.image_UI_matrix, self.text_UI_matrix, self.audio_UI_matrix)
-			diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+			# diffusion_ui_adj = self.image_UI_matrix  + self.text_UI_matrix +  self.audio_UI_matrix # TODO 这里是暂时这样写的
+			diffusion_ui_adj = self.image_UI_matrix
 			# all_embeddings_users, all_embeddings_items, side_embedding, content_embedding
 			usrEmbeds, itmEmbeds, side_Embeds, content_Emebeds = self.model.forward(self.handler.R, self.handler.torchBiAdj, diffusion_ui_adj, self.image_II_matrix, self.text_II_matrix, self.audio_II_matrix, self.modal_fusion_II_matrix) 
 		else:
