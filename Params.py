@@ -12,7 +12,7 @@ def ParseArgs():
 	parser.add_argument('--topk', default=20, type=int, help='K of top K')
 	parser.add_argument('--data', default='allrecipes', type=str, help='name of dataset')
 	parser.add_argument('--ssl_reg', default=1e-2, type=float, help='weight for contrative learning')
-	parser.add_argument('--temp', default=0.5, type=float, help='temperature in contrastive learning')
+	parser.add_argument('--temp', default=0.7, type=float, help='temperature in contrastive learning')
 	parser.add_argument('--tstEpoch', default=1, type=int, help='number of epoch to test while training')
 	parser.add_argument('--gpu', default='0', type=str, help='indicates which gpu to use')
 	parser.add_argument("--seed", type=int, default=421, help="random seed")
