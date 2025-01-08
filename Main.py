@@ -81,22 +81,28 @@ class Coach:
 		# self.diffusion_model = BernoulliDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda()
 		
 		# 扩散模型中的降噪模型，用于预测反向生成的噪音
-		out_dims = eval(args.dims) + [args.item]
-		in_dims = out_dims[::-1]
+		# out_dims = eval(args.dims) + [args.item]
+		# in_dims = out_dims[::-1]
+		out_dims = self.image_embedding.shape[0]
+		in_dims = self.image_embedding.shape[0]
 		#print("in_dims:",in_dims, "out_dims:", out_dims)
-		self.denoise_model_image = Denoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		self.denoise_model_image = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
 		self.denoise_opt_image = torch.optim.Adam(self.denoise_model_image.parameters(), lr=args.lr, weight_decay=0)
 
-		out_dims = eval(args.dims) + [args.item]
-		in_dims = out_dims[::-1]
-		self.denoise_model_text = Denoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		# out_dims = eval(args.dims) + [args.item]
+		# in_dims = out_dims[::-1]
+		out_dims = self.image_embedding.shape[0]
+		in_dims = self.image_embedding.shape[0]
+		self.denoise_model_text = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
 		self.denoise_opt_text = torch.optim.Adam(self.denoise_model_text.parameters(), lr=args.lr, weight_decay=0)
 
 		if args.data == 'tiktok':
 
-			out_dims = eval(args.dims) + [args.item]
-			in_dims = out_dims[::-1]
-			self.denoise_model_audio = Denoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+			# out_dims = eval(args.dims) + [args.item]
+			# in_dims = out_dims[::-1]
+			out_dims = self.image_embedding.shape[0]
+			in_dims = self.image_embedding.shape[0]
+			self.denoise_model_audio = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
 			self.denoise_opt_audio = torch.optim.Adam(self.denoise_model_audio.parameters(), lr=args.lr, weight_decay=0)
 		
 		'''
