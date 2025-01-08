@@ -397,16 +397,16 @@ class Coach:
 			# print("audio_feats:", image_feats)
 			# print("audio_feats.shape:", image_feats.shape)
 
-			diff_loss_image, gc_loss_image = self.diffusion_model.training_losses(self.denoise_model_image, batch_item, iEmbeds, batch_index, image_feats)
+			diff_loss_image, gc_loss_image, contra_loss_image = self.diffusion_model.training_losses(self.denoise_model_image, batch_item, iEmbeds, batch_index, image_feats)
 			
-			diff_loss_text, gc_loss_text = self.diffusion_model.training_losses(self.denoise_model_text, batch_item, iEmbeds, batch_index, text_feats)
+			diff_loss_text, gc_loss_text, contra_loss_text = self.diffusion_model.training_losses(self.denoise_model_text, batch_item, iEmbeds, batch_index, text_feats)
 			if args.data == 'tiktok':
-				diff_loss_audio, gc_loss_audio = self.diffusion_model.training_losses(self.denoise_model_audio, batch_item, iEmbeds, batch_index, audio_feats)
+				diff_loss_audio, gc_loss_audio, contra_loss_audio = self.diffusion_model.training_losses(self.denoise_model_audio, batch_item, iEmbeds, batch_index, audio_feats)
 
-			loss_image = diff_loss_image.mean() + gc_loss_image.mean() * args.e_loss
-			loss_text = diff_loss_text.mean() + gc_loss_text.mean() * args.e_loss
+			loss_image = diff_loss_image.mean() + gc_loss_image.mean() * args.e_loss + contra_loss_image.mean() * args.ssl_reg
+			loss_text = diff_loss_text.mean() + gc_loss_text.mean() * args.e_loss + contra_loss_text.mean() * args.ssl_reg
 			if args.data == 'tiktok':
-				loss_audio = diff_loss_audio.mean() + gc_loss_audio.mean() * args.e_loss
+				loss_audio = diff_loss_audio.mean() + gc_loss_audio.mean() * args.e_loss + contra_loss_audio.mean() * args.ssl_reg
 
 
 			epDiLoss_image += loss_image.item()
@@ -515,35 +515,35 @@ class Coach:
 				
 		
 				# # hyper parameters：
-				# self.latent_interest_topk = args.rebuild_k
-				# self.high_order_latent_interest_topk = self.latent_interest_topk + 2
+				self.latent_interest_topk = args.rebuild_k
+				self.high_order_latent_interest_topk = self.latent_interest_topk + 2
 				for i in range(batch_index.shape[0]):
-				# 	# 每一人对每一个物品
-				# 	# a user id 
-				# 	latent_intertest_items = indices_[i] # 潜在感兴趣的物品id
-				# 	#print("int(batch_index[i].cpu().numpy():", int(batch_index[i].cpu().numpy()), "int(indices_[i][j].cpu().numpy()):", indices_[i][j].cpu().numpy())
-				# 	# 计算当前这个用户10个潜在感兴趣的物品中的相似度
-				# 	#print("latent_intertest_items:", latent_intertest_items) # tensor([4679, 5724,  964, 6520, 5668, 2106, 3135,  535, 2544, 1084], device='cuda:0')
-				# 	#print("self.image_II_matrix_dense.shape:", self.image_II_matrix_dense.shape)
-				# 	#print("self.image_II_matrix[latent_intertest_items]:", self.image_modal_diffusion_representation[latent_intertest_items])
-				# 	latent_multimodal_items_sim =  torch.multiply(self.image_II_matrix_dense[latent_intertest_items], self.text_II_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
-				# 	if args.data == 'tiktok': 
-				# 		latent_multimodal_items_sim = torch.multiply(latent_multimodal_items_sim, self.audio_II_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
-				# 	# 根据当前这个用户10个潜在感兴趣的物品中的相似度找到Top的物品：(历史真实交互的物品的扩散降噪生成后的平均概率作为阈值， 只要不小于该阈值，则认为扩散生成的其他物品为当前用户潜在感兴趣的物品)
-				# 	latent_multimodal_items_prob, latent_multimodal_items_index = torch.topk(latent_multimodal_items_sim, self.latent_interest_topk, dim=-1) # (10, 10)
-				# 	high_order_items_prob, high_order_items_index = torch.topk(latent_multimodal_items_prob.flatten(), self.high_order_latent_interest_topk)
-				# 	# TODO：筛选策略
-				# 	high_order_latent_interest_items = latent_multimodal_items_index.flatten()[high_order_items_index]
-				# 	for item in high_order_latent_interest_items:
-				# 		u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
-				# 		i_list_image.append(int(item.item()))
-				# 		edge_list_image.append(1.0) 
-
-
-					for j in range(indices_[i].shape[0]): 
+					# 每一人对每一个物品
+					# a user id 
+					latent_intertest_items = indices_[i] # 潜在感兴趣的物品id
+					#print("int(batch_index[i].cpu().numpy():", int(batch_index[i].cpu().numpy()), "int(indices_[i][j].cpu().numpy()):", indices_[i][j].cpu().numpy())
+					# 计算当前这个用户10个潜在感兴趣的物品中的相似度
+					#print("latent_intertest_items:", latent_intertest_items) # tensor([4679, 5724,  964, 6520, 5668, 2106, 3135,  535, 2544, 1084], device='cuda:0')
+					#print("self.image_II_matrix_dense.shape:", self.image_II_matrix_dense.shape)
+					#print("self.image_II_matrix[latent_intertest_items]:", self.image_modal_diffusion_representation[latent_intertest_items])
+					latent_multimodal_items_sim =  torch.multiply(self.image_II_matrix_dense[latent_intertest_items], self.text_II_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
+					if args.data == 'tiktok': 
+						latent_multimodal_items_sim = torch.multiply(latent_multimodal_items_sim, self.audio_II_matrix_dense[latent_intertest_items]) # (10, 6710) * (10, 6710) = (10, 6710)
+					# 根据当前这个用户10个潜在感兴趣的物品中的相似度找到Top的物品：(历史真实交互的物品的扩散降噪生成后的平均概率作为阈值， 只要不小于该阈值，则认为扩散生成的其他物品为当前用户潜在感兴趣的物品)
+					latent_multimodal_items_prob, latent_multimodal_items_index = torch.topk(latent_multimodal_items_sim, self.latent_interest_topk, dim=-1) # (10, 10)
+					high_order_items_prob, high_order_items_index = torch.topk(latent_multimodal_items_prob.flatten(), self.high_order_latent_interest_topk)
+					# TODO：筛选策略
+					high_order_latent_interest_items = latent_multimodal_items_index.flatten()[high_order_items_index]
+					for item in high_order_latent_interest_items:
 						u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
-						i_list_image.append(int(indices_[i][j].cpu().numpy())) # item id 5724
+						i_list_image.append(int(item.item()))
 						edge_list_image.append(1.0) 
+
+
+					# for j in range(indices_[i].shape[0]): 
+					# 	u_list_image.append(int(batch_index[i].cpu().numpy())) # uid 3226
+					# 	i_list_image.append(int(indices_[i][j].cpu().numpy())) # item id 5724
+					# 	edge_list_image.append(1.0) 
 
 				# text
 				denoised_batch = self.diffusion_model.p_sample(self.denoise_model_text, batch_item, args.sampling_steps, args.sampling_noise)
