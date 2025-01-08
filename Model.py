@@ -721,7 +721,7 @@ class MultimodalDenoise(nn.Module):
 		self.out_dims = out_dims 
 		self.time_emb_dim = tiem_emb_size 
 		self.norm = norm 
-		self.dropout = dropout
+		self.dropout = nn.Dropout(dropout)
 		self.time_embedding_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
 
 		self.linear_projrct = nn.Sequential(
@@ -754,9 +754,15 @@ class MultimodalDenoise(nn.Module):
 			x_audio : 加噪的视觉模态特征 torch.Size([1024, 128])
 		'''
 		time_emb = self.time_embedding(timesteps)
+		if self.norm:
+			x_image= F.normalize(x_image)
+			x_text = F.normalize(x_text)
+			x_audio = F.normalize(x_audio)
 
-
-		
+		if mess_dropout:
+			x_image = self.dropout(x_image)
+			x_text = self.dropout(x_text)
+			x_audio = self.dropout(x_audio)
 
 
 
