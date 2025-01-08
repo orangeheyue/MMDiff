@@ -705,6 +705,61 @@ class SpAdjDropEdge(nn.Module):
 		return torch.sparse.FloatTensor(newIdxs, newVals, adj.shape)
 
 
+class MultimodalDenoise(nn.Module):
+	'''
+		多模态降噪模型: 用于预测扩散模型的噪声
+		特性： 在扩散的每一步骤中，引入跨模态的引导信息，使得模型能够根据不同模态的特征更好地调整生成的方向。
+		例如，利用文本特征引导扩散过程中对物品语义相关属性的生成，利用图像特征引导视觉相关属性的生成，通过设计合适的注意力机制或者额外的引导损失函数等，
+		让各模态特征在扩散过程中相互协作、相互制约，以生成更符合多模态综合信息的样本。
+	'''	
+	def __init__(self, in_dims, out_dims, tiem_emb_size, norm=False, dropout=0.2):
+		'''
+			初始化
+		'''
+		super(MultimodalDenoise, self).__init__()
+		self.in_dims = in_dims
+		self.out_dims = out_dims 
+		self.time_emb_dim = tiem_emb_size 
+		self.norm = norm 
+		self.dropout = dropout
+		self.time_embedding_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
+
+		self.linear_projrct = nn.Sequential(
+			nn.Linear()
+		)
+	
+	def image_modal_project(self, image_feature):
+		'''
+			图像模态特征提取
+		'''	
+		pass 
+	
+	def time_embedding(self, timesteps):
+		'''
+			Time embedding
+		'''
+		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda()
+		temp = timesteps[:, None].float() * freqs[None]
+		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)
+		if self.time_emb_dim % 2:
+			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
+		#print("time_emb.shape:", time_emb.shape)
+		emb = self.emb_layer(time_emb)
+		return emb
+	
+	def forward(self, x_image, x_text, x_audio, timesteps, mess_dropout=True):
+		'''
+			x_image : 加噪的视觉模态特征 torch.Size([1024, 128])
+			x_text : 加噪的视觉模态特征  torch.Size([1024, 768])
+			x_audio : 加噪的视觉模态特征 torch.Size([1024, 128])
+		'''
+		time_emb = self.time_embedding(timesteps)
+
+
+		
+
+
+
 class ModalDenoise(nn.Module):
 	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.2):
 		'''
@@ -1349,13 +1404,19 @@ class GaussianDiffusion(nn.Module):
 		weight = torch.where((ts == 0), 1.0, weight)
 
 		diff_loss = weight * mse
-
+		#
 		usr_model_embeds = torch.mm(model_output, model_feats)
 		usr_id_embeds = torch.mm(x_start, itmEmbeds)
-
 		gc_loss = self.mean_flat((usr_model_embeds - usr_id_embeds) ** 2)
+		
+		# 原始图卷积的模态向量 与 生成的模态向量之间的对比损失，使得生成的模态正样本靠近原始
+		model_feat_embedding =  torch.multiply(itmEmbeds, model_feats)
+		model_feat_embedding_origin = torch.mm(x_start, model_feat_embedding)
+		model_feat_embedding_diffusion = torch.mm(model_output, model_feat_embedding)
 
-		return diff_loss, gc_loss
+		contra_loss = self.infoNCE_loss(model_feat_embedding_origin, model_feat_embedding_diffusion, 0.2)
+
+		return diff_loss, gc_loss, contra_loss
 	
 
 	def training_multimodal_feature_diffusion_losses(self, model, x_start):
@@ -1392,7 +1453,20 @@ class GaussianDiffusion(nn.Module):
 
 		return modal_feature_diffusion_loss
 		
+			
+	def infoNCE_loss(self, view1, view2,  temperature):
+		'''
+			InfoNCE loss
+		'''
+		view1, view2 = F.normalize(view1, dim=1), F.normalize(view2, dim=1)
+		pos_score = torch.sum((view1 * view2), dim=-1)
+		pos_score = torch.exp(pos_score / temperature)
 
+		neg_score = (view1 @ view2.T) / temperature
+		neg_score = torch.exp(neg_score).sum(dim=1)
+		contrast_loss = -1 * torch.log(pos_score / neg_score).mean()
+
+		return contrast_loss
 
 		
 	def mean_flat(self, tensor):
