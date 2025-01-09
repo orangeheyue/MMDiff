@@ -5,6 +5,7 @@ Multi-View Diffusion for Multimodal Recommendation
 
 ```python
 python Main.py --data tiktok --reg 1e-4 --ssl_reg 1e-2 --epoch 50 --trans 1 --e_loss 0.1 --cl_method 1
+nohup python Main.py --data tiktok --reg 1e-4 --ssl_reg 1e-2 --epoch 50 --trans 1 --e_loss 0.1 --cl_method 1 > exp_2025_01_08_tiktok_1.log 2>&1 
 ```
 
 - Baby
