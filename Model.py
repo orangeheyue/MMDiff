@@ -1266,7 +1266,7 @@ class BernoulliDiffusion(nn.Module):
 class GaussianDiffusion(nn.Module):
 	def __init__(self, noise_scale, noise_min, noise_max, steps, beta_fixed=True):
 		super(GaussianDiffusion, self).__init__()
-
+		self.i = 0
 		self.noise_scale = noise_scale
 		self.noise_min = noise_min
 		self.noise_max = noise_max
@@ -1279,7 +1279,6 @@ class GaussianDiffusion(nn.Module):
 
 			self.calculate_for_diffusion()
 
-		self.i = 0
 	def get_betas(self):
 		'''
 			TODO: 在实际应用中，数据中的噪声可能是非线性的，这样的线性噪声生成机制可能会限制模型对真实噪声的拟合能力。
@@ -1343,9 +1342,19 @@ class GaussianDiffusion(nn.Module):
 
 	def q_sample(self, x_start, t, noise=None):
 		'''
-			标准的前向扩散: 加入噪音
-		
+			标准的前向扩散: 加入噪音 
+			Noise(t, s, pos)
+			dense diffusion q_sample:x_start: tensor([[3.1504, 1.7197, 4.0469,  ..., 2.2773, 5.6953, 2.9414],
+							[2.8691, 3.0664, 1.2949,  ..., 4.4531, 1.7051, 0.3076],
+							[3.1055, 2.2812, 5.6992,  ..., 2.7812, 1.9307, 4.4336],
+							...,
+							[0.8501, 3.2363, 2.4023,  ..., 4.9102, 1.0312, 1.1895],
+							[3.0508, 2.5781, 3.0469,  ..., 5.0273, 1.0996, 3.7324],
+							[4.1758, 6.7891, 1.5459,  ..., 5.0156, 4.8594, 2.8789]],
+						device='cuda:0')
 		'''
+		#print("dense diffusion q_sample:x_start:", x_start)
+
 		if noise is None:
 			noise = torch.randn_like(x_start)
 		return self._extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
@@ -1388,6 +1397,7 @@ class GaussianDiffusion(nn.Module):
 			model_feats: 
 
 		'''
+		#print("training_losses:x_start:", x_start)
 		batch_size = x_start.size(0) # 1024
 		
 		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda() # ts: tensor([2, 3, 3,  ..., 0, 1, 1], device='cuda:0')
@@ -1485,4 +1495,244 @@ class GaussianDiffusion(nn.Module):
 
 
 
+class SparityDiffusion(nn.Module):
+	'''
+		User-Item Interaction Graph Sparity Diffusion 
+
+	'''
+	def __init__(self, noise_scale, noise_min, noise_max, steps, beta_fixed=True):
+		super(SparityDiffusion, self).__init__()
+
+		self.i = 0
+		self.alpha_sparity = 0.01
+		self.beta_sparity = 0.01
+		self.open_noise_adaptive = True
+		self.noise_adaptive_factor = 1.0
+		self.postive_gain_degree  = 0.5
+
+		self.noise_scale = noise_scale
+		self.noise_min = noise_min
+		self.noise_max = noise_max
+		self.steps = steps
+
+		if noise_scale != 0:
+			self.betas = torch.tensor(self.get_betas(), dtype=torch.float64).cuda()
+			if beta_fixed:
+				self.betas[0] = 0.0001
+
+			self.calculate_for_diffusion()
+
+	def get_betas(self):
+		'''
+			TODO: 在实际应用中，数据中的噪声可能是非线性的，这样的线性噪声生成机制可能会限制模型对真实噪声的拟合能力。
+		
+		'''
+		start = self.noise_scale * self.noise_min
+		end = self.noise_scale * self.noise_max
+		variance = np.linspace(start, end, self.steps, dtype=np.float64)
+		alpha_bar = 1 - variance
+		betas = []
+		betas.append(1 - alpha_bar[0])
+		for i in range(1, self.steps):
+			betas.append(min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999))
+		return np.array(betas) 
+
+	def calculate_for_diffusion(self):
+		alphas = 1.0 - self.betas
+		self.alphas_cumprod = torch.cumprod(alphas, axis=0).cuda()
+		self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0]).cuda(), self.alphas_cumprod[:-1]]).cuda()
+		self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0]).cuda()]).cuda()
+
+		self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
+		self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
+		self.log_one_minus_alphas_cumprod = torch.log(1.0 - self.alphas_cumprod)
+		self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
+		self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
+
+		self.posterior_variance = (
+			self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+		)
+		self.posterior_log_variance_clipped = torch.log(torch.cat([self.posterior_variance[1].unsqueeze(0), self.posterior_variance[1:]]))
+		self.posterior_mean_coef1 = (self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+		self.posterior_mean_coef2 = ((1.0 - self.alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - self.alphas_cumprod))
+
+	def p_sample(self, model, x_start, steps, sampling_noise=False):
+		'''
+			这种简单的高斯噪声添加方式可能不适合所有的数据类型和分布。如果数据本身具有非高斯的噪声特性，或者数据的结构对噪声的形式有特殊要求，这样的噪声添加方式可能会导致生成的样本质量下降。
+			TODO: 多模态仍采用高斯搞噪声， 而交互图则属于稀疏分布，需要计算以下其数据分布
+		
+		'''
+		if steps == 0:
+			x_t = x_start
+		else:
+			t = torch.tensor([steps-1] * x_start.shape[0]).cuda()
+			x_t = self.q_sample(x_start, t)
+		
+		indices = list(range(self.steps))[::-1]
+
+		for i in indices:
+			t = torch.tensor([i] * x_t.shape[0]).cuda()
+			model_mean, model_log_variance = self.p_mean_variance(model, x_t, t)
+			if sampling_noise:
+
+				noise = torch.randn_like(x_t)
+				nonzero_mask = ((t!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
+				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
+			else:
+				x_t = model_mean
+		return x_t
+
+
+	def q_sample(self, x_start, t, noise=None):
+		'''
+			User-Item稀疏自适应采样
+			标准的前向扩散: 加入噪音 
+			Noise(t, s, pos)
+			We can notice that the user-item interaction matrix is a sparity graph:
+			sparity diffusion q_sample:
+							x_start: tensor([[0., 0., 0.,  ..., 0., 0., 0.],
+										[0., 0., 0.,  ..., 0., 0., 0.],
+										[0., 0., 0.,  ..., 0., 0., 0.],
+										...,
+										[0., 0., 0.,  ..., 0., 0., 0.],
+										[0., 0., 0.,  ..., 0., 0., 0.],
+										[0., 0., 0.,  ..., 0., 0., 0.]], device='cuda:0')
+		
+		'''
+		#print("sparity diffusion q_sample:x_start:", x_start)
+		if self.open_noise_adaptive:
+			'''
+				计算自适应噪声系数:
+					1. 计算对当前的batch级别的稀疏度 noise_adaptive_penalty_factor:1 - 交互图求和 / (batch_size x items number) 目的是用于宏观的控制batch与batch之间的稀疏噪声比例,
+					 	 noise_adaptive_penalty_factor 自适应的噪声惩罚因子越大说明当前batch的交互越稀疏,那么batch级别的整体噪声对比其他batch会更大
+					2. 超参数:alpha_sparity用于控制噪声缩放的比例, beta_sparity用于控制噪声衰减的程度
+					3. 计算每个batch内部原始的交互正样本mask: 通过降低batch内原始交互的的噪声,保留原始交互的信息
+
+
+			'''
+			batch_size = x_start.shape[0]
+			item_size = x_start.shape[1]
+			#计算对当前的batch级别的稀疏度
+			#print("t:", t)
+			#print("t.shape:", t.shape)
+			#print("x_start.sum():", x_start.sum())
+			batch_noise_adaptive_penalty_factor  = 1 - (x_start.sum() / (batch_size * item_size))
+			#print("batch_noise_adaptive_penalty_factor:", batch_noise_adaptive_penalty_factor)
+			noise_coe = self.alpha_sparity * (1 + batch_noise_adaptive_penalty_factor) * torch.exp(-1.0 * self.beta_sparity * t) # batch
+			# 计算每个batch内部原始的交互正样本mask:
+			ones_tensor = torch.ones_like(x_start)
+			batch_postive_position_mask_matirx = torch.where(x_start == 0, ones_tensor - x_start, self.postive_gain_degree * x_start)
+			#print("noise_coe:", noise_coe)
+			#print("batch_postive_position_mask_matirx:", batch_postive_position_mask_matirx)
+			noise_coe = noise_coe.unsqueeze(1)
+			# print("noise_coe.unsqueeze:", noise_coe)
+			noise_coe =  noise_coe * batch_postive_position_mask_matirx 
+			
+
+		if noise is None:
+			noise = torch.randn_like(x_start)
+			# print("dense noise:", noise)
+		# print("dense noise:", noise)
+		# print("sparity noise:", noise_coe)
+		noise = noise * noise_coe
+		return self._extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise 
+
+	def _extract_into_tensor(self, arr, timesteps, broadcast_shape):
+		arr = arr.cuda()
+		res = arr[timesteps].float()
+		while len(res.shape) < len(broadcast_shape):
+			res = res[..., None]
+		return res.expand(broadcast_shape)
+
+	def p_mean_variance(self, model, x, t):
+		model_output = model(x, t, False)
+
+		model_variance = self.posterior_variance
+		model_log_variance = self.posterior_log_variance_clipped
+
+		model_variance = self._extract_into_tensor(model_variance, t, x.shape)
+		model_log_variance = self._extract_into_tensor(model_log_variance, t, x.shape)
+
+		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, t, x.shape) * model_output + self._extract_into_tensor(self.posterior_mean_coef2, t, x.shape) * x)
+		
+		return model_mean, model_log_variance
+
+	def training_losses(self, model, x_start, itmEmbeds, batch_index, model_feats):
+		'''
+			model: 降噪模型
+			x_start:
+			 		[tensor([[0., 0., 0.,  ..., 0., 0., 0.],
+					[0., 0., 0.,  ..., 0., 0., 0.],
+					[0., 0., 0.,  ..., 0., 0., 0.],
+					...,
+					[0., 0., 0.,  ..., 0., 0., 0.],
+					[0., 0., 0.,  ..., 0., 0., 0.],
+					[0., 0., 0.,  ..., 0., 0., 0.]])
+
+			x_start.shape: torch.Size([1024, 6710])
+
+			itmEmbeds: item embedding
+			model_feats: 
+
+		'''
+		#print("training_losses:x_start:", x_start)
+		batch_size = x_start.size(0) # 1024
+		
+		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda() # ts: tensor([2, 3, 3,  ..., 0, 1, 1], device='cuda:0')
+
+		noise = torch.randn_like(x_start) 
+		# print("noise:", noise)
+		if self.noise_scale != 0:
+			x_t = self.q_sample(x_start, ts, noise)
+		else:
+			x_t = x_start
+		
+		# x_t作为采样后加噪的特征，形状不变
+		#print("x_start.shape:", x_start.shape)
+		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
+		model_output = model(x_t, ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
+
+		# mse = self.mean_flat((x_start - model_output) ** 2)
+		mse = self.mean_flat((noise - model_output) ** 2)
+		weight = self.SNR(ts - 1) - self.SNR(ts)
+		weight = torch.where((ts == 0), 1.0, weight)
+
+		diff_loss = weight * mse
+		#
+		usr_model_embeds = torch.mm(model_output, model_feats)
+		usr_id_embeds = torch.mm(x_start, itmEmbeds)
+		gc_loss = self.mean_flat((usr_model_embeds - usr_id_embeds) ** 2)
+		
+		# 原始图卷积的模态向量 与 生成的模态向量之间的对比损失，使得生成的模态正样本靠近原始
+		model_feat_embedding =  torch.multiply(itmEmbeds, model_feats)
+		model_feat_embedding_origin = torch.mm(x_start, model_feat_embedding)
+		model_feat_embedding_diffusion = torch.mm(model_output, model_feat_embedding)
+
+		contra_loss = self.infoNCE_loss(model_feat_embedding_origin, model_feat_embedding_diffusion, 0.2)
+
+		return diff_loss, gc_loss, contra_loss
+	
+
+			
+	def infoNCE_loss(self, view1, view2,  temperature):
+		'''
+			InfoNCE loss
+		'''
+		view1, view2 = F.normalize(view1, dim=1), F.normalize(view2, dim=1)
+		pos_score = torch.sum((view1 * view2), dim=-1)
+		pos_score = torch.exp(pos_score / temperature)
+
+		neg_score = (view1 @ view2.T) / temperature
+		neg_score = torch.exp(neg_score).sum(dim=1)
+		contrast_loss = -1 * torch.log(pos_score / neg_score).mean()
+
+		return contrast_loss
+
+		
+	def mean_flat(self, tensor):
+		return tensor.mean(dim=list(range(1, len(tensor.shape))))
+	
+	def SNR(self, t):
+		self.alphas_cumprod = self.alphas_cumprod.cuda()
+		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t])
 	
