@@ -2,7 +2,7 @@ import torch
 import Utils.TimeLogger as logger
 from Utils.TimeLogger import log
 from Params import args
-from Model import Model, GaussianDiffusion, BernoulliDiffusion, Denoise, ModalDenoise, GCNModel
+from Model import Model, GaussianDiffusion, SparityDiffusion, BernoulliDiffusion, Denoise, ModalDenoise, GCNModel
 from DataHandler import DataHandler
 import numpy as np
 from Utils.Utils import *
@@ -78,6 +78,7 @@ class Coach:
 		# 扩散模型：辅助模型，用来进行生成特征和交互图，计算扩散损失 
 		# TODO: 这里还是原本的DDPM，用于生成密集的密集型特征，但是对于交互矩阵等稀疏型特征，我们可以设计一种新的稀疏型Diffusion: Sparse Diffusion 
 		self.diffusion_model = GaussianDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda() 
+		self.sparity_diffusion_model = SparityDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda() 
 		# self.diffusion_model = BernoulliDiffusion(args.noise_scale, args.noise_min, args.noise_max, args.steps).cuda()
 		
 		# 扩散模型中的降噪模型，用于预测反向生成的噪音
@@ -397,11 +398,11 @@ class Coach:
 			# print("audio_feats:", image_feats)
 			# print("audio_feats.shape:", image_feats.shape)
 
-			diff_loss_image, gc_loss_image, contra_loss_image = self.diffusion_model.training_losses(self.denoise_model_image, batch_item, iEmbeds, batch_index, image_feats)
+			diff_loss_image, gc_loss_image, contra_loss_image = self.sparity_diffusion_model.training_losses(self.denoise_model_image, batch_item, iEmbeds, batch_index, image_feats)
 			
-			diff_loss_text, gc_loss_text, contra_loss_text = self.diffusion_model.training_losses(self.denoise_model_text, batch_item, iEmbeds, batch_index, text_feats)
+			diff_loss_text, gc_loss_text, contra_loss_text = self.sparity_diffusion_model.training_losses(self.denoise_model_text, batch_item, iEmbeds, batch_index, text_feats)
 			if args.data == 'tiktok':
-				diff_loss_audio, gc_loss_audio, contra_loss_audio = self.diffusion_model.training_losses(self.denoise_model_audio, batch_item, iEmbeds, batch_index, audio_feats)
+				diff_loss_audio, gc_loss_audio, contra_loss_audio = self.sparity_diffusion_model.training_losses(self.denoise_model_audio, batch_item, iEmbeds, batch_index, audio_feats)
 
 			loss_image = diff_loss_image.mean() + gc_loss_image.mean() * args.e_loss + contra_loss_image.mean() * args.ssl_reg
 			loss_text = diff_loss_text.mean() + gc_loss_text.mean() * args.e_loss + contra_loss_text.mean() * args.ssl_reg
@@ -451,7 +452,7 @@ class Coach:
 				batch_item, batch_index = batch_item.cuda(), batch_index.cuda()
 
 				# image 
-				denoised_batch = self.diffusion_model.p_sample(self.denoise_model_image, batch_item, args.sampling_steps, args.sampling_noise)
+				denoised_batch = self.sparity_diffusion_model.p_sample(self.denoise_model_image, batch_item, args.sampling_steps, args.sampling_noise)
 				# print("denoised_batch.shape", denoised_batch.shape) # denoised_batch.shape torch.Size([1024, 6710])
 				'''
 					denoised_batch tensor([[-0.0065,  0.0102,  0.0007,  ..., -0.0208,  0.0343, -0.0176],
@@ -546,7 +547,7 @@ class Coach:
 					# 	edge_list_image.append(1.0) 
 
 				# text
-				denoised_batch = self.diffusion_model.p_sample(self.denoise_model_text, batch_item, args.sampling_steps, args.sampling_noise)
+				denoised_batch = self.sparity_diffusion_model.p_sample(self.denoise_model_text, batch_item, args.sampling_steps, args.sampling_noise)
 				top_item, indices_ = torch.topk(denoised_batch, k=args.rebuild_k)			
 				for i in range(batch_index.shape[0]):
 					for j in range(indices_[i].shape[0]): 
@@ -557,7 +558,7 @@ class Coach:
 
 				if args.data == 'tiktok':
 					# audio
-					denoised_batch = self.diffusion_model.p_sample(self.denoise_model_audio, batch_item, args.sampling_steps, args.sampling_noise)
+					denoised_batch = self.sparity_diffusion_model.p_sample(self.denoise_model_audio, batch_item, args.sampling_steps, args.sampling_noise)
 					top_item, indices_ = torch.topk(denoised_batch, k=args.rebuild_k)
 
 					for i in range(batch_index.shape[0]):
