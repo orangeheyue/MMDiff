@@ -705,7 +705,7 @@ class SpAdjDropEdge(nn.Module):
 		return torch.sparse.FloatTensor(newIdxs, newVals, adj.shape)
 
 
-class MultimodalDenoise(nn.Module):
+class MultimodalDenoiseModel(nn.Module):
 	'''
 		多模态降噪模型: 用于预测扩散模型的噪声
 		特性： 在扩散的每一步骤中，引入跨模态的引导信息，使得模型能够根据不同模态的特征更好地调整生成的方向。
@@ -716,7 +716,7 @@ class MultimodalDenoise(nn.Module):
 		'''
 			初始化
 		'''
-		super(MultimodalDenoise, self).__init__()
+		super(MultimodalDenoiseModel, self).__init__()
 		self.in_dims = in_dims
 		self.out_dims = out_dims 
 		self.time_emb_dim = tiem_emb_size 
@@ -747,22 +747,21 @@ class MultimodalDenoise(nn.Module):
 		emb = self.emb_layer(time_emb)
 		return emb
 	
-	def forward(self, x_image, x_text, x_audio, timesteps, mess_dropout=True):
+	def forward(self, x_image, x_text, x_audio, timesteps):
 		'''
 			x_image : 加噪的视觉模态特征 torch.Size([1024, 128])
 			x_text : 加噪的视觉模态特征  torch.Size([1024, 768])
 			x_audio : 加噪的视觉模态特征 torch.Size([1024, 128])
 		'''
 		time_emb = self.time_embedding(timesteps)
-		if self.norm:
-			x_image= F.normalize(x_image)
-			x_text = F.normalize(x_text)
-			x_audio = F.normalize(x_audio)
 
-		if mess_dropout:
-			x_image = self.dropout(x_image)
-			x_text = self.dropout(x_text)
-			x_audio = self.dropout(x_audio)
+		if x_image is not None:
+			x_image = torch.cat([x_image, time_emb], dim=-1)
+		if x_text is not None:
+			x_text = torch.cat([x_text, time_emb], dim=-1)		
+		if x_audio is not None:
+			x_audio = torch.cat([x_audio, time_emb], dim=-1)
+		
 
 
 
@@ -1507,8 +1506,8 @@ class SparityDiffusion(nn.Module):
 		self.alpha_sparity = 0.01
 		self.beta_sparity = 0.01
 		self.open_noise_adaptive = True
-		self.noise_adaptive_factor = 1.0
-		self.postive_gain_degree  = 0.5
+		# self.noise_adaptive_factor = 1.0
+		self.postive_gain_degree  = 0.9
 
 		self.noise_scale = noise_scale
 		self.noise_min = noise_min
@@ -1597,7 +1596,32 @@ class SparityDiffusion(nn.Module):
 										[0., 0., 0.,  ..., 0., 0., 0.],
 										[0., 0., 0.,  ..., 0., 0., 0.],
 										[0., 0., 0.,  ..., 0., 0., 0.]], device='cuda:0')
-		
+			dense noise: tensor([[ 0.1494,  1.1025, -2.3029,  ..., -0.1020,  0.4252,  1.0298],
+			[-2.7948, -0.2945,  0.3371,  ...,  0.7070, -0.2771, -0.7421],
+			[ 1.6383,  0.5597, -0.8324,  ..., -0.3544,  0.9020,  2.2479],
+			...,
+			[-0.5109,  1.1489, -1.2644,  ..., -0.5671, -1.5741,  1.5121],
+			[ 1.1731, -0.1791,  0.6984,  ...,  1.4251,  1.0476, -0.2946],
+			[ 1.8517, -0.6595,  1.5685,  ..., -0.8226, -1.5371,  0.7761]],
+			device='cuda:0')
+
+			noise_coe: tensor([[0.0200, 0.0200, 0.0200,  ..., 0.0200, 0.0200, 0.0200],
+					[0.0194, 0.0194, 0.0194,  ..., 0.0194, 0.0194, 0.0194],
+					[0.0200, 0.0200, 0.0200,  ..., 0.0200, 0.0200, 0.0200],
+					...,
+					[0.0198, 0.0198, 0.0198,  ..., 0.0198, 0.0198, 0.0198],
+					[0.0198, 0.0198, 0.0198,  ..., 0.0198, 0.0198, 0.0198],
+					[0.0194, 0.0194, 0.0194,  ..., 0.0194, 0.0194, 0.0194]],
+				device='cuda:0')
+
+			sparity noise: tensor([[ 0.0030,  0.0220, -0.0461,  ..., -0.0020,  0.0085,  0.0206],
+					[-0.0542, -0.0057,  0.0065,  ...,  0.0137, -0.0054, -0.0144],
+					[ 0.0328,  0.0112, -0.0166,  ..., -0.0071,  0.0180,  0.0450],
+					...,
+					[-0.0101,  0.0227, -0.0250,  ..., -0.0112, -0.0312,  0.0299],
+					[ 0.0232, -0.0035,  0.0138,  ...,  0.0282,  0.0207, -0.0058],
+					[ 0.0359, -0.0128,  0.0304,  ..., -0.0160, -0.0298,  0.0151]],
+				device='cuda:0')
 		'''
 		#print("sparity diffusion q_sample:x_start:", x_start)
 		if self.open_noise_adaptive:
@@ -1625,7 +1649,7 @@ class SparityDiffusion(nn.Module):
 			#print("noise_coe:", noise_coe)
 			#print("batch_postive_position_mask_matirx:", batch_postive_position_mask_matirx)
 			noise_coe = noise_coe.unsqueeze(1)
-			# print("noise_coe.unsqueeze:", noise_coe)
+			#print("noise_coe.unsqueeze:", noise_coe)
 			noise_coe =  noise_coe * batch_postive_position_mask_matirx 
 			
 
@@ -1633,8 +1657,9 @@ class SparityDiffusion(nn.Module):
 			noise = torch.randn_like(x_start)
 			# print("dense noise:", noise)
 		# print("dense noise:", noise)
-		# print("sparity noise:", noise_coe)
+		# print("noise_coe:", noise_coe)
 		noise = noise * noise_coe
+		#print("sparity noise:", noise)
 		return self._extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise 
 
 	def _extract_into_tensor(self, arr, timesteps, broadcast_shape):
