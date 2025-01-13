@@ -705,35 +705,145 @@ class SpAdjDropEdge(nn.Module):
 		return torch.sparse.FloatTensor(newIdxs, newVals, adj.shape)
 
 
+class ImageEncoder(nn.Module):
+	def __init__(self, image_feature_dim, hidden_dim):
+		super(ImageEncoder, self).__init__()
+		self.fc1 = nn.Linear(image_feature_dim, hidden_dim)
+		self.norm1 = nn.BatchNorm1d(hidden_dim)
+		self.relu1 = nn.LeakyReLU()
+		self.drop1 = nn.Dropout(0.3)
+
+		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+		self.norm2 = nn.BatchNorm1d(hidden_dim)
+		self.relu2 = nn.LeakyReLU()
+		self.drop2 = nn.Dropout(0.3)
+
+
+	def forward(self, image_features):
+		x_ = self.drop1(self.relu1(self.norm1(self.fc1(image_features))))
+		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+		return x + x_
+
+class TextEncoder(nn.Module):
+	def __init__(self, text_feature_dim, hidden_dim):
+		super(TextEncoder, self).__init__()
+		self.fc1 = nn.Linear(text_feature_dim, hidden_dim)
+		self.norm1 = nn.BatchNorm1d(hidden_dim)
+		self.relu1 = nn.LeakyReLU()
+		self.drop1 = nn.Dropout(0.3)
+
+		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+		self.norm2 = nn.BatchNorm1d(hidden_dim)
+		self.relu2 = nn.LeakyReLU()
+		self.drop2 = nn.Dropout(0.3)
+
+
+	def forward(self, text_embeddings):
+		x_ = self.drop1(self.relu1(self.norm1(self.fc1(text_embeddings))))
+		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+		return x + x_
+
+
+class AudioEncoder(nn.Module):
+	def __init__(self, audio_feature_dim, hidden_dim):
+		super(AudioEncoder, self).__init__()
+		self.fc1 = nn.Linear(audio_feature_dim, hidden_dim)
+		self.norm1 = nn.BatchNorm1d(hidden_dim)
+		self.relu1 = nn.LeakyReLU()
+		self.drop1 = nn.Dropout(0.3)
+
+		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+		self.norm2 = nn.BatchNorm1d(hidden_dim)
+		self.relu2 = nn.LeakyReLU()
+		self.drop2 = nn.Dropout(0.3)
+
+
+	def forward(self, audio_features):
+		x_= self.drop1(self.relu1(self.norm1(self.fc1(audio_features))))
+		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+		return x + x_
+
+'''
+	query: fusion tensor
+	key:   modal tensor
+	key:   modal tensor
+'''
+
+class CrossModalAttention(nn.Module):
+	def __init__(self, dim_key, dim_value, dim_query):
+		super(CrossModalAttention, self).__init__()
+		self.query_proj = nn.Linear(dim_query, dim_key)
+		self.key_proj = nn.Linear(dim_key, dim_key)
+		self.value_proj = nn.Linear(dim_value, dim_value)
+		self.softmax = nn.Softmax(dim=-1)
+
+	def forward(self, query, key, value):
+		#print("query:", query.shape, "key:", key.shape, "value:", value.shape) # query: torch.Size([1024, 128]) key: torch.Size([1024, 128]) value: torch.Size([1024, 128])
+
+		query = self.query_proj(query) # 
+		key = self.key_proj(key)
+		value = self.value_proj(value)
+		# print("query:", query.shape, "key:", key.shape, "value:", value.shape)
+		attention_scores = torch.matmul(query, key.transpose(-2, -1)) / (query.size(-1) ** 0.5)
+		attention_weights = self.softmax(attention_scores)
+
+		attended_value = torch.matmul(attention_weights, value)
+		return attended_value
+
+
 class MultimodalDenoiseModel(nn.Module):
 	'''
+		CrossModal Denoise Model
 		多模态降噪模型: 用于预测扩散模型的噪声
 		特性： 在扩散的每一步骤中，引入跨模态的引导信息，使得模型能够根据不同模态的特征更好地调整生成的方向。
 		例如，利用文本特征引导扩散过程中对物品语义相关属性的生成，利用图像特征引导视觉相关属性的生成，通过设计合适的注意力机制或者额外的引导损失函数等，
 		让各模态特征在扩散过程中相互协作、相互制约，以生成更符合多模态综合信息的样本。
 	'''	
-	def __init__(self, in_dims, out_dims, tiem_emb_size, norm=False, dropout=0.2):
+	def __init__(self, image_in_dims, text_in_dims, audio_in_dims, out_dims, time_emb_size, modal_falg='image'):
 		'''
 			初始化
 		'''
 		super(MultimodalDenoiseModel, self).__init__()
-		self.in_dims = in_dims
-		self.out_dims = out_dims 
-		self.time_emb_dim = tiem_emb_size 
-		self.norm = norm 
-		self.dropout = nn.Dropout(dropout)
+
+		self.image_in_dims, self.text_in_dims, self.audio_in_dims = image_in_dims, text_in_dims, audio_in_dims
+		self.time_emb_dim = time_emb_size 
+		self.out_dims = out_dims
+		# self.norm = norm 
+		self.modal_falg = modal_falg
 		self.time_embedding_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
 
-		self.linear_projrct = nn.Sequential(
-			nn.Linear()
-		)
-	
-	def image_modal_project(self, image_feature):
-		'''
-			图像模态特征提取
-		'''	
-		pass 
-	
+		self.fusion_hidden_dim = (self.image_in_dims + self.text_in_dims + self.audio_in_dims)  if args.data == 'tiktok' else (self.image_in_dims + self.text_in_dims)
+		
+
+		self.image_encoder = ImageEncoder(image_feature_dim=self.image_in_dims + self.time_emb_dim, hidden_dim=self.image_in_dims).cuda()
+		self.text_encoder = TextEncoder(text_feature_dim=self.text_in_dims + self.time_emb_dim, hidden_dim=self.text_in_dims).cuda()
+		if args.data == 'tiktok':
+			self.audio_encoder = AudioEncoder(audio_feature_dim=self.audio_in_dims + self.time_emb_dim, hidden_dim=self.audio_in_dims).cuda()
+
+		self.fusion_layer = nn.Sequential(
+			nn.Linear(in_features=self.fusion_hidden_dim, out_features=self.out_dims),
+			nn.BatchNorm1d(self.out_dims),
+			nn.LeakyReLU(),
+			nn.Dropout(0.3)
+		).cuda()
+
+		# cross modal attention 
+		self.image_attention = CrossModalAttention(self.out_dims, self.out_dims, self.out_dims).cuda()
+		self.text_attention = CrossModalAttention(self.out_dims, self.out_dims, self.out_dims).cuda()
+		self.audio_attention = CrossModalAttention(self.out_dims, self.out_dims, self.out_dims).cuda()
+
+		# def image_modal_project(self, in_dim, out_dim):
+		# 	'''
+		# 		图像模态特征提取
+		# 	'''	
+		# 	layer = nn.Sequential(
+		# 		nn.Linear(in_features=in_dim, out_features=out_dim),
+		# 		nn.BatchNorm1d(out_dim),
+		# 		nn.LeakyReLU(),
+		# 		nn.Dropout(0.3)
+		# 	)
+		
+
 	def time_embedding(self, timesteps):
 		'''
 			Time embedding
@@ -744,26 +854,48 @@ class MultimodalDenoiseModel(nn.Module):
 		if self.time_emb_dim % 2:
 			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
 		#print("time_emb.shape:", time_emb.shape)
-		emb = self.emb_layer(time_emb)
+		#print("time_emb.device", time_emb.device)
+		self.time_embedding_layer = self.time_embedding_layer.cuda()
+		emb = self.time_embedding_layer(time_emb)
+		# print("emb.device", emb.device)
 		return emb
 	
 	def forward(self, x_image, x_text, x_audio, timesteps):
 		'''
-			x_image : 加噪的视觉模态特征 torch.Size([1024, 128])
-			x_text : 加噪的视觉模态特征  torch.Size([1024, 768])
-			x_audio : 加噪的视觉模态特征 torch.Size([1024, 128])
+			x_image : 加噪的视觉模态特征  torch.Size([1024, 128])
+			x_text  : 加噪的视觉模态特征  torch.Size([1024, 760])
+			x_audio : 加噪的视觉模态特征  torch.Size([1024, 128])
 		'''
+		x_image_feature, x_text_feature, x_audio_feature = None, None, None
 		time_emb = self.time_embedding(timesteps)
 
 		if x_image is not None:
 			x_image = torch.cat([x_image, time_emb], dim=-1)
+			x_image_feature = self.image_encoder(x_image)
 		if x_text is not None:
 			x_text = torch.cat([x_text, time_emb], dim=-1)		
+			x_text_feature = self.text_encoder(x_text)
 		if x_audio is not None:
 			x_audio = torch.cat([x_audio, time_emb], dim=-1)
+			x_audio_feature = self.audio_encoder(x_audio)
 		
+		# multimdoal fusion
+		if args.data == 'tiktok':
+			fusion_features = torch.cat([x_image_feature, x_text_feature, x_audio_feature], dim=-1)
+		else:
+			fusion_features = torch.cat([x_image_feature, x_text_feature], dim=-1)
+		fusion_features = self.fusion_layer(fusion_features)
 
+		# caculate multimodal attention
+		if self.modal_falg == 'image':
+			attention_feature = self.image_attention(fusion_features, x_image_feature, x_image_feature)
+		if self.modal_falg == 'text':
+			attention_feature = self.audio_attention(fusion_features, x_text_feature, x_text_feature)
 
+		if args.data == 'tiktok' and self.modal_falg == 'audio':
+						attention_feature = self.audio_attention(fusion_features, x_audio_feature, x_audio_feature)
+		out  = fusion_features + attention_feature 
+		return out
 
 class ModalDenoise(nn.Module):
 	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.2):
@@ -866,147 +998,147 @@ class ModalDenoise(nn.Module):
 		return h
 
 
-class ModalDenoiseUNet(nn.Module):
-	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
-		'''
-			生成epsilon
-			没有Embedding ?
-		'''
-		super(ModalDenoiseUNet, self).__init__()
-		self.in_dims = in_dims # 128
-		self.out_dims = out_dims # 128
-		self.time_emb_dim = emb_size # 10
-		self.norm = norm
-		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
+# class ModalDenoiseUNet(nn.Module):
+# 	def __init__(self, in_dims, out_dims, emb_size, norm=False, dropout=0.5):
+# 		'''
+# 			生成epsilon
+# 			没有Embedding ?
+# 		'''
+# 		super(ModalDenoiseUNet, self).__init__()
+# 		self.in_dims = in_dims # 128
+# 		self.out_dims = out_dims # 128
+# 		self.time_emb_dim = emb_size # 10
+# 		self.norm = norm
+# 		self.emb_layer = nn.Linear(self.time_emb_dim, self.time_emb_dim)
 		
-		in_features = (in_dims + self.time_emb_dim)
+# 		in_features = (in_dims + self.time_emb_dim)
 
-		#print("in_features",in_features)
-		# 下采样
-		self.down_sampling1 = self.mlp(in_features, self.in_dims // 2)
-		self.down_pool1 = nn.MaxPool1d(1)
+# 		#print("in_features",in_features)
+# 		# 下采样
+# 		self.down_sampling1 = self.mlp(in_features, self.in_dims // 2)
+# 		self.down_pool1 = nn.MaxPool1d(1)
 
-		self.down_sampling2 = self.mlp(self.in_dims // 2, self.in_dims// 4)
-		self.down_pool2 = nn.MaxPool1d(1)
+# 		self.down_sampling2 = self.mlp(self.in_dims // 2, self.in_dims// 4)
+# 		self.down_pool2 = nn.MaxPool1d(1)
 
-		self.down_sampling3 = self.mlp(self.in_dims// 4, self.in_dims// 8)
-		self.down_pool3 = nn.MaxPool1d(1)
+# 		self.down_sampling3 = self.mlp(self.in_dims// 4, self.in_dims// 8)
+# 		self.down_pool3 = nn.MaxPool1d(1)
 		
-		self.middle_connect = self.mlp(self.in_dims //8, self.in_dims // 8)
+# 		self.middle_connect = self.mlp(self.in_dims //8, self.in_dims // 8)
 
-		# 上采样
-		self.up_sampling1 = self.up_sampling(self.in_dims // 8 + self.in_dims // 8 , self.in_dims // 4)
-		self.up_sampling2 = self.up_sampling(self.in_dims // 4 + self.in_dims // 4, self.in_dims // 2)
-		self.up_sampling3 = self.up_sampling(self.in_dims // 2  +  self.in_dims // 2, self.in_dims)
+# 		# 上采样
+# 		self.up_sampling1 = self.up_sampling(self.in_dims // 8 + self.in_dims // 8 , self.in_dims // 4)
+# 		self.up_sampling2 = self.up_sampling(self.in_dims // 4 + self.in_dims // 4, self.in_dims // 2)
+# 		self.up_sampling3 = self.up_sampling(self.in_dims // 2  +  self.in_dims // 2, self.in_dims)
 
-		self.drop = nn.Dropout(dropout)
-		self.initialize_weights()
+# 		self.drop = nn.Dropout(dropout)
+# 		self.initialize_weights()
 
-	def mlp(self, in_features, out_features):
-		#print("in_features, out_features:", in_features, out_features)
-		return nn.Sequential(
-			nn.Linear(in_features=in_features, out_features=out_features),
-			nn.BatchNorm1d(out_features),
-			nn.LeakyReLU(),
-			nn.Dropout(),
-			nn.Linear(in_features=out_features, out_features=out_features),
-			nn.BatchNorm1d(out_features),
-			nn.LeakyReLU(),
-			nn.Dropout() 
-		)
+# 	def mlp(self, in_features, out_features):
+# 		#print("in_features, out_features:", in_features, out_features)
+# 		return nn.Sequential(
+# 			nn.Linear(in_features=in_features, out_features=out_features),
+# 			nn.BatchNorm1d(out_features),
+# 			nn.LeakyReLU(),
+# 			nn.Dropout(),
+# 			nn.Linear(in_features=out_features, out_features=out_features),
+# 			nn.BatchNorm1d(out_features),
+# 			nn.LeakyReLU(),
+# 			nn.Dropout() 
+# 		)
 
 
-	def up_sampling(self, in_features, out_features):
-		return nn.Sequential(
-			nn.Linear(in_features=in_features, out_features=out_features),
-			nn.BatchNorm1d(out_features),
-			nn.ReLU(inplace=True)
-		)
+# 	def up_sampling(self, in_features, out_features):
+# 		return nn.Sequential(
+# 			nn.Linear(in_features=in_features, out_features=out_features),
+# 			nn.BatchNorm1d(out_features),
+# 			nn.ReLU(inplace=True)
+# 		)
 	
 
-	def initialize_weights(self):
-		"""
-		对down_sampling、middle_connect和up_sampling中的线性层权重和偏差进行初始化
-		"""
-		# 遍历下采样模块中的线性层进行初始化
-		for down_module in [self.down_sampling1, self.down_sampling2, self.down_sampling3]:
-			for layer in down_module:
-				if isinstance(layer, nn.Linear):
-					size = layer.weight.size()
-					std = np.sqrt(2.0 / (size[0] + size[1]))
-					layer.weight.data.normal_(0.0, std)
-					layer.bias.data.normal_(0.0, 0.001)
+# 	def initialize_weights(self):
+# 		"""
+# 		对down_sampling、middle_connect和up_sampling中的线性层权重和偏差进行初始化
+# 		"""
+# 		# 遍历下采样模块中的线性层进行初始化
+# 		for down_module in [self.down_sampling1, self.down_sampling2, self.down_sampling3]:
+# 			for layer in down_module:
+# 				if isinstance(layer, nn.Linear):
+# 					size = layer.weight.size()
+# 					std = np.sqrt(2.0 / (size[0] + size[1]))
+# 					layer.weight.data.normal_(0.0, std)
+# 					layer.bias.data.normal_(0.0, 0.001)
 
-		# 对中间连接模块中的线性层进行初始化
-		for layer in self.middle_connect:
-			if isinstance(layer, nn.Linear):
-				size = layer.weight.size()
-				std = np.sqrt(2.0 / (size[0] + size[1]))
-				layer.weight.data.normal_(0.0, std)
-				layer.bias.data.normal_(0.0, 0.001)
+# 		# 对中间连接模块中的线性层进行初始化
+# 		for layer in self.middle_connect:
+# 			if isinstance(layer, nn.Linear):
+# 				size = layer.weight.size()
+# 				std = np.sqrt(2.0 / (size[0] + size[1]))
+# 				layer.weight.data.normal_(0.0, std)
+# 				layer.bias.data.normal_(0.0, 0.001)
 
-		# 遍历上采样模块中的线性层进行初始化
-		for up_module in [self.up_sampling1, self.up_sampling2, self.up_sampling3]:
-			for layer in up_module:
-				if isinstance(layer, nn.Linear):
-					size = layer.weight.size()
-					std = np.sqrt(2.0 / (size[0] + size[1]))
-					layer.weight.data.normal_(0.0, std)
-					layer.bias.data.normal_(0.0, 0.001)
+# 		# 遍历上采样模块中的线性层进行初始化
+# 		for up_module in [self.up_sampling1, self.up_sampling2, self.up_sampling3]:
+# 			for layer in up_module:
+# 				if isinstance(layer, nn.Linear):
+# 					size = layer.weight.size()
+# 					std = np.sqrt(2.0 / (size[0] + size[1]))
+# 					layer.weight.data.normal_(0.0, std)
+# 					layer.bias.data.normal_(0.0, 0.001)
 
-		# 对时间嵌入层的线性层进行初始化
-		for layer in [self.emb_layer]:
-			if isinstance(layer, nn.Linear):
-				size = layer.weight.size()
-				std = np.sqrt(2.0 / (size[0] + size[1]))
-				layer.weight.data.normal_(0.0, std)
-				layer.bias.data.normal_(0.0, 0.001)
+# 		# 对时间嵌入层的线性层进行初始化
+# 		for layer in [self.emb_layer]:
+# 			if isinstance(layer, nn.Linear):
+# 				size = layer.weight.size()
+# 				std = np.sqrt(2.0 / (size[0] + size[1]))
+# 				layer.weight.data.normal_(0.0, std)
+# 				layer.bias.data.normal_(0.0, 0.001)
 
 
-	def forward(self, x, timesteps, mess_dropout=True):
-		# \\print("x.shape:", x.shape) # x.shape: torch.Size([1024, 128])
-		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda()
-		temp = timesteps[:, None].float() * freqs[None]
-		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)
-		if self.time_emb_dim % 2:
-			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
-		#print("time_emb.shape:", time_emb.shape)
-		emb = self.emb_layer(time_emb)
+# 	def forward(self, x, timesteps, mess_dropout=True):
+# 		# \\print("x.shape:", x.shape) # x.shape: torch.Size([1024, 128])
+# 		freqs = torch.exp(-math.log(10000) * torch.arange(start=0, end=self.time_emb_dim//2, dtype=torch.float32) / (self.time_emb_dim//2)).cuda()
+# 		temp = timesteps[:, None].float() * freqs[None]
+# 		time_emb = torch.cat([torch.cos(temp), torch.sin(temp)], dim=-1)
+# 		if self.time_emb_dim % 2:
+# 			time_emb = torch.cat([time_emb, torch.zeros_like(time_emb[:, :1])], dim=-1)
+# 		#print("time_emb.shape:", time_emb.shape)
+# 		emb = self.emb_layer(time_emb)
 		
-		if self.norm:
-			x = F.normalize(x)
-		if mess_dropout:
-			x = self.drop(x)
+# 		if self.norm:
+# 			x = F.normalize(x)
+# 		if mess_dropout:
+# 			x = self.drop(x)
 	
-		# print("x.shape:", x.shape) # tiktok x.shape: torch.Size([1024, 128])   baby: x.shape: torch.Size([1024, 4096])
-		# print("emb.shape:", emb.shape)
-		h = torch.cat([x, emb], dim=-1)
-		# Down Sample
-		#print("h .shape:", h.shape) #  h .shape: torch.Size([1024, 4106])
-		down_x1 = self.down_sampling1(h)
-		#print('down_x1.shape:', down_x1.shape) # down_x1.shape: torch.Size([1024, 2048])
-		pool_x1 = self.down_pool1(down_x1)
-		#print("pool_x1.shape:", pool_x1.shape) # pool_x1.shape: torch.Size([1024, 2048])
-		down_x2 = self.down_sampling2(pool_x1)
-		#print('down_x2.shape:', down_x2.shape)  # down_x2.shape: torch.Size([1024, 1024])
-		pool_x2 = self.down_pool2(down_x2)
-		#print("pool_x2.shape:", pool_x2.shape) # pool_x2.shape: torch.Size([1024, 1024])
-		down_x3 = self.down_sampling3(pool_x2)
-		#print('down_x3.shape:', down_x3.shape)  # down_x3.shape: torch.Size([1024, 512])
-		pool_x3 = self.down_pool3(down_x3)
-		#print("pool_x3.shape:", pool_x3.shape)  # pool_x3.shape: torch.Size([1024, 512])
-		# Middle 
-		middle = self.middle_connect(pool_x3)
-		#print("middle.shape:", middle.shape) # middle.shape: torch.Size([1024, 512])
-		#print("torch.cat([middle, down_x3].shape:", torch.cat([middle, down_x3], dim=1).shape)
-        # 上采样过程，融合跳跃连接的特征
-		up_x1 = self.up_sampling1(torch.cat([middle, down_x3], dim=1))
-		#print("up_x1.shape:", up_x1.shape)
-		up_x2 = self.up_sampling2(torch.cat([up_x1, down_x2], dim=1))
-		#print("up_x2.shape:", up_x2.shape)
-		up_x3 = self.up_sampling3(torch.cat([up_x2, down_x1], dim=1))
-		#print("up_x3.shape:", up_x3.shape)
-		return up_x3
+# 		# print("x.shape:", x.shape) # tiktok x.shape: torch.Size([1024, 128])   baby: x.shape: torch.Size([1024, 4096])
+# 		# print("emb.shape:", emb.shape)
+# 		h = torch.cat([x, emb], dim=-1)
+# 		# Down Sample
+# 		#print("h .shape:", h.shape) #  h .shape: torch.Size([1024, 4106])
+# 		down_x1 = self.down_sampling1(h)
+# 		#print('down_x1.shape:', down_x1.shape) # down_x1.shape: torch.Size([1024, 2048])
+# 		pool_x1 = self.down_pool1(down_x1)
+# 		#print("pool_x1.shape:", pool_x1.shape) # pool_x1.shape: torch.Size([1024, 2048])
+# 		down_x2 = self.down_sampling2(pool_x1)
+# 		#print('down_x2.shape:', down_x2.shape)  # down_x2.shape: torch.Size([1024, 1024])
+# 		pool_x2 = self.down_pool2(down_x2)
+# 		#print("pool_x2.shape:", pool_x2.shape) # pool_x2.shape: torch.Size([1024, 1024])
+# 		down_x3 = self.down_sampling3(pool_x2)
+# 		#print('down_x3.shape:', down_x3.shape)  # down_x3.shape: torch.Size([1024, 512])
+# 		pool_x3 = self.down_pool3(down_x3)
+# 		#print("pool_x3.shape:", pool_x3.shape)  # pool_x3.shape: torch.Size([1024, 512])
+# 		# Middle 
+# 		middle = self.middle_connect(pool_x3)
+# 		#print("middle.shape:", middle.shape) # middle.shape: torch.Size([1024, 512])
+# 		#print("torch.cat([middle, down_x3].shape:", torch.cat([middle, down_x3], dim=1).shape)
+#         # 上采样过程，融合跳跃连接的特征
+# 		up_x1 = self.up_sampling1(torch.cat([middle, down_x3], dim=1))
+# 		#print("up_x1.shape:", up_x1.shape)
+# 		up_x2 = self.up_sampling2(torch.cat([up_x1, down_x2], dim=1))
+# 		#print("up_x2.shape:", up_x2.shape)
+# 		up_x3 = self.up_sampling3(torch.cat([up_x2, down_x1], dim=1))
+# 		#print("up_x3.shape:", up_x3.shape)
+# 		return up_x3
 	
 
 
@@ -1077,189 +1209,181 @@ class Denoise(nn.Module):
 		return h
 
 
-class  LaplaceDiffusion(nn.Module):
-	'''
-		拉普拉斯扩散：视觉、音频、文本扩散
-			
-	'''
-	pass 
 
-
-
-class BernoulliDiffusion(nn.Module):
-	def __init__(self, noise_scale, noise_min, noise_max, steps, beta_fixed=True):
-		'''
-		伯努利：
-		缓解用户-物品交互矩阵的稀疏0-1扩散
+# class BernoulliDiffusion(nn.Module):
+# 	def __init__(self, noise_scale, noise_min, noise_max, steps, beta_fixed=True):
+# 		'''
+# 		伯努利：
+# 		缓解用户-物品交互矩阵的稀疏0-1扩散
 	
-		'''
-		super(BernoulliDiffusion, self).__init__()
+# 		'''
+# 		super(BernoulliDiffusion, self).__init__()
 
-		self.noise_scale = noise_scale
-		self.noise_min = noise_min
-		self.noise_max = noise_max
-		self.steps = steps
+# 		self.noise_scale = noise_scale
+# 		self.noise_min = noise_min
+# 		self.noise_max = noise_max
+# 		self.steps = steps
 
-		if noise_scale != 0:
-			self.betas = torch.tensor(self.get_betas(), dtype=torch.float64).cuda()
-			if beta_fixed:
-				self.betas[0] = 0.0001
+# 		if noise_scale != 0:
+# 			self.betas = torch.tensor(self.get_betas(), dtype=torch.float64).cuda()
+# 			if beta_fixed:
+# 				self.betas[0] = 0.0001
 
-			self.calculate_for_diffusion()
+# 			self.calculate_for_diffusion()
 
-		self.i = 0
-	def get_betas(self):
-		'''
-			TODO: 在实际应用中，数据中的噪声可能是非线性的，这样的线性噪声生成机制可能会限制模型对真实噪声的拟合能力。
+# 		self.i = 0
+# 	def get_betas(self):
+# 		'''
+# 			TODO: 在实际应用中，数据中的噪声可能是非线性的，这样的线性噪声生成机制可能会限制模型对真实噪声的拟合能力。
 		
-		'''
-		start = self.noise_scale * self.noise_min
-		end = self.noise_scale * self.noise_max
-		variance = np.linspace(start, end, self.steps, dtype=np.float64)
-		alpha_bar = 1 - variance
-		betas = []
-		betas.append(1 - alpha_bar[0])
-		for i in range(1, self.steps):
-			betas.append(min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999))
-		return np.array(betas) 
+# 		'''
+# 		start = self.noise_scale * self.noise_min
+# 		end = self.noise_scale * self.noise_max
+# 		variance = np.linspace(start, end, self.steps, dtype=np.float64)
+# 		alpha_bar = 1 - variance
+# 		betas = []
+# 		betas.append(1 - alpha_bar[0])
+# 		for i in range(1, self.steps):
+# 			betas.append(min(1 - alpha_bar[i] / alpha_bar[i-1], 0.999))
+# 		return np.array(betas) 
 
-	def calculate_for_diffusion(self):
-		alphas = 1.0 - self.betas
-		self.alphas_cumprod = torch.cumprod(alphas, axis=0).cuda()
-		self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0]).cuda(), self.alphas_cumprod[:-1]]).cuda()
-		self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0]).cuda()]).cuda()
+# 	def calculate_for_diffusion(self):
+# 		alphas = 1.0 - self.betas
+# 		self.alphas_cumprod = torch.cumprod(alphas, axis=0).cuda()
+# 		self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0]).cuda(), self.alphas_cumprod[:-1]]).cuda()
+# 		self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0]).cuda()]).cuda()
 
-		self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
-		self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
-		self.log_one_minus_alphas_cumprod = torch.log(1.0 - self.alphas_cumprod)
-		self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
-		self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
+# 		self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
+# 		self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - self.alphas_cumprod)
+# 		self.log_one_minus_alphas_cumprod = torch.log(1.0 - self.alphas_cumprod)
+# 		self.sqrt_recip_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod)
+# 		self.sqrt_recipm1_alphas_cumprod = torch.sqrt(1.0 / self.alphas_cumprod - 1)
 
-		self.posterior_variance = (
-			self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
-		)
-		self.posterior_log_variance_clipped = torch.log(torch.cat([self.posterior_variance[1].unsqueeze(0), self.posterior_variance[1:]]))
-		self.posterior_mean_coef1 = (self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
-		self.posterior_mean_coef2 = ((1.0 - self.alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - self.alphas_cumprod))
+# 		self.posterior_variance = (
+# 			self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+# 		)
+# 		self.posterior_log_variance_clipped = torch.log(torch.cat([self.posterior_variance[1].unsqueeze(0), self.posterior_variance[1:]]))
+# 		self.posterior_mean_coef1 = (self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+# 		self.posterior_mean_coef2 = ((1.0 - self.alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - self.alphas_cumprod))
 
-	def p_sample(self, model, x_start, steps, sampling_noise=False):
-		'''
-			这种简单的高斯噪声添加方式可能不适合所有的数据类型和分布。如果数据本身具有非高斯的噪声特性，或者数据的结构对噪声的形式有特殊要求，这样的噪声添加方式可能会导致生成的样本质量下降。
-			TODO: 多模态仍采用高斯搞噪声， 而交互图则属于稀疏分布，需要计算以下其数据分布
+# 	def p_sample(self, model, x_start, steps, sampling_noise=False):
+# 		'''
+# 			这种简单的高斯噪声添加方式可能不适合所有的数据类型和分布。如果数据本身具有非高斯的噪声特性，或者数据的结构对噪声的形式有特殊要求，这样的噪声添加方式可能会导致生成的样本质量下降。
+# 			TODO: 多模态仍采用高斯搞噪声， 而交互图则属于稀疏分布，需要计算以下其数据分布
 		
-		'''
-		if steps == 0:
-			x_t = x_start
-		else:
-			t = torch.tensor([steps-1] * x_start.shape[0]).cuda()
-			x_t = self.q_sample(x_start, t)
+# 		'''
+# 		if steps == 0:
+# 			x_t = x_start
+# 		else:
+# 			t = torch.tensor([steps-1] * x_start.shape[0]).cuda()
+# 			x_t = self.q_sample(x_start, t)
 		
-		indices = list(range(self.steps))[::-1]
+# 		indices = list(range(self.steps))[::-1]
 
-		for i in indices:
-			t = torch.tensor([i] * x_t.shape[0]).cuda()
-			model_mean, model_log_variance = self.p_mean_variance(model, x_t, t)
-			if sampling_noise:
+# 		for i in indices:
+# 			t = torch.tensor([i] * x_t.shape[0]).cuda()
+# 			model_mean, model_log_variance = self.p_mean_variance(model, x_t, t)
+# 			if sampling_noise:
 
-				# noise = torch.randn_like(x_t)
-				noise_prob = torch.rand_like(x_t)
-				noise = torch.bernoulli(noise_prob)
+# 				# noise = torch.randn_like(x_t)
+# 				noise_prob = torch.rand_like(x_t)
+# 				noise = torch.bernoulli(noise_prob)
 
-				nonzero_mask = ((t!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
-				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
-			else:
-				x_t = model_mean
-		return x_t
+# 				nonzero_mask = ((t!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
+# 				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
+# 			else:
+# 				x_t = model_mean
+# 		return x_t
 
 
-	def q_sample(self, x_start, t, noise=None):
-		'''
-			标准的前向扩散: 加入噪音
+# 	def q_sample(self, x_start, t, noise=None):
+# 		'''
+# 			标准的前向扩散: 加入噪音
 		
-		'''
-		if noise is None:
-			# noise = torch.randn_like(x_start)
-			noise_prob = torch.rand_like(x_start)
-			noise = torch.bernoulli(noise_prob)
-		return self._extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+# 		'''
+# 		if noise is None:
+# 			# noise = torch.randn_like(x_start)
+# 			noise_prob = torch.rand_like(x_start)
+# 			noise = torch.bernoulli(noise_prob)
+# 		return self._extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
 
-	def _extract_into_tensor(self, arr, timesteps, broadcast_shape):
-		arr = arr.cuda()
-		res = arr[timesteps].float()
-		while len(res.shape) < len(broadcast_shape):
-			res = res[..., None]
-		return res.expand(broadcast_shape)
+# 	def _extract_into_tensor(self, arr, timesteps, broadcast_shape):
+# 		arr = arr.cuda()
+# 		res = arr[timesteps].float()
+# 		while len(res.shape) < len(broadcast_shape):
+# 			res = res[..., None]
+# 		return res.expand(broadcast_shape)
 
-	def p_mean_variance(self, model, x, t):
-		model_output = model(x, t, False)
+# 	def p_mean_variance(self, model, x, t):
+# 		model_output = model(x, t, False)
 
-		model_variance = self.posterior_variance
-		model_log_variance = self.posterior_log_variance_clipped
+# 		model_variance = self.posterior_variance
+# 		model_log_variance = self.posterior_log_variance_clipped
 
-		model_variance = self._extract_into_tensor(model_variance, t, x.shape)
-		model_log_variance = self._extract_into_tensor(model_log_variance, t, x.shape)
+# 		model_variance = self._extract_into_tensor(model_variance, t, x.shape)
+# 		model_log_variance = self._extract_into_tensor(model_log_variance, t, x.shape)
 
-		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, t, x.shape) * model_output + self._extract_into_tensor(self.posterior_mean_coef2, t, x.shape) * x)
+# 		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, t, x.shape) * model_output + self._extract_into_tensor(self.posterior_mean_coef2, t, x.shape) * x)
 		
-		return model_mean, model_log_variance
+# 		return model_mean, model_log_variance
 
-	def training_losses(self, model, x_start, itmEmbeds, batch_index, model_feats):
-		'''
-			model: 降噪模型
-			x_start:
-			 		[tensor([[0., 0., 0.,  ..., 0., 0., 0.],
-					[0., 0., 0.,  ..., 0., 0., 0.],
-					[0., 0., 0.,  ..., 0., 0., 0.],
-					...,
-					[0., 0., 0.,  ..., 0., 0., 0.],
-					[0., 0., 0.,  ..., 0., 0., 0.],
-					[0., 0., 0.,  ..., 0., 0., 0.]])
+# 	def training_losses(self, model, x_start, itmEmbeds, batch_index, model_feats):
+# 		'''
+# 			model: 降噪模型
+# 			x_start:
+# 			 		[tensor([[0., 0., 0.,  ..., 0., 0., 0.],
+# 					[0., 0., 0.,  ..., 0., 0., 0.],
+# 					[0., 0., 0.,  ..., 0., 0., 0.],
+# 					...,
+# 					[0., 0., 0.,  ..., 0., 0., 0.],
+# 					[0., 0., 0.,  ..., 0., 0., 0.],
+# 					[0., 0., 0.,  ..., 0., 0., 0.]])
 
-			x_start.shape: torch.Size([1024, 6710])
+# 			x_start.shape: torch.Size([1024, 6710])
 
-			itmEmbeds: item embedding
-			model_feats: 
+# 			itmEmbeds: item embedding
+# 			model_feats: 
 
-		'''
-		batch_size = x_start.size(0) # 1024
+# 		'''
+# 		batch_size = x_start.size(0) # 1024
 		
-		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda() # ts: tensor([2, 3, 3,  ..., 0, 1, 1], device='cuda:0')
+# 		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda() # ts: tensor([2, 3, 3,  ..., 0, 1, 1], device='cuda:0')
 
-		# noise = torch.randn_like(x_start) 
-		noise_prob = torch.rand_like(x_start)
-		noise = torch.bernoulli(noise_prob)
-		# print("noise:", noise)
-		if self.noise_scale != 0:
-			x_t = self.q_sample(x_start, ts, noise)
-		else:
-			x_t = x_start
+# 		# noise = torch.randn_like(x_start) 
+# 		noise_prob = torch.rand_like(x_start)
+# 		noise = torch.bernoulli(noise_prob)
+# 		# print("noise:", noise)
+# 		if self.noise_scale != 0:
+# 			x_t = self.q_sample(x_start, ts, noise)
+# 		else:
+# 			x_t = x_start
 		
-		# x_t作为采样后加噪的特征，形状不变
-		#print("x_start.shape:", x_start.shape)
-		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
-		model_output = model(x_t, ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
+# 		# x_t作为采样后加噪的特征，形状不变
+# 		#print("x_start.shape:", x_start.shape)
+# 		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
+# 		model_output = model(x_t, ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
 
-		# mse = self.mean_flat((x_start - model_output) ** 2)
-		mse = self.mean_flat((noise - model_output) ** 2)
-		weight = self.SNR(ts - 1) - self.SNR(ts)
-		weight = torch.where((ts == 0), 1.0, weight)
+# 		# mse = self.mean_flat((x_start - model_output) ** 2)
+# 		mse = self.mean_flat((noise - model_output) ** 2)
+# 		weight = self.SNR(ts - 1) - self.SNR(ts)
+# 		weight = torch.where((ts == 0), 1.0, weight)
 
-		diff_loss = weight * mse
+# 		diff_loss = weight * mse
 
-		usr_model_embeds = torch.mm(model_output, model_feats)
-		usr_id_embeds = torch.mm(x_start, itmEmbeds)
+# 		usr_model_embeds = torch.mm(model_output, model_feats)
+# 		usr_id_embeds = torch.mm(x_start, itmEmbeds)
 
-		gc_loss = self.mean_flat((usr_model_embeds - usr_id_embeds) ** 2)
+# 		gc_loss = self.mean_flat((usr_model_embeds - usr_id_embeds) ** 2)
 
-		return diff_loss, gc_loss
+# 		return diff_loss, gc_loss
 	
 
-	def mean_flat(self, tensor):
-		return tensor.mean(dim=list(range(1, len(tensor.shape))))
+# 	def mean_flat(self, tensor):
+# 		return tensor.mean(dim=list(range(1, len(tensor.shape))))
 	
-	def SNR(self, t):
-		self.alphas_cumprod = self.alphas_cumprod.cuda()
-		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t])
+# 	def SNR(self, t):
+# 		self.alphas_cumprod = self.alphas_cumprod.cuda()
+# 		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t])
 
 
 class GaussianDiffusion(nn.Module):
@@ -1312,30 +1436,38 @@ class GaussianDiffusion(nn.Module):
 		self.posterior_mean_coef1 = (self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
 		self.posterior_mean_coef2 = ((1.0 - self.alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - self.alphas_cumprod))
 
-	def p_sample(self, model, x_start, steps, sampling_noise=False):
+	def p_sample(self, model, x_start_image, x_start_text, x_start_audio, steps, sampling_noise=False, modal_falg='image'):
 		'''
 			这种简单的高斯噪声添加方式可能不适合所有的数据类型和分布。如果数据本身具有非高斯的噪声特性，或者数据的结构对噪声的形式有特殊要求，这样的噪声添加方式可能会导致生成的样本质量下降。
 			TODO: 多模态仍采用高斯搞噪声， 而交互图则属于稀疏分布，需要计算以下其数据分布
 		
 		'''
+		batch_size = x_start_image.shape[0]
 		if steps == 0:
-			x_t = x_start
+			x_t_image = x_start_image 
+			x_t_text = x_start_text 
+			x_t_audio = x_start_audio
 		else:
-			t = torch.tensor([steps-1] * x_start.shape[0]).cuda()
-			x_t = self.q_sample(x_start, t)
-		
+			t = torch.tensor([steps-1] * batch_size).cuda()
+			x_t_image = self.q_sample(x_start_image, t, None)
+			x_t_text = self.q_sample(x_start_text,  t, None)
+
+			if args.data == 'tiktok':
+					x_t_audio = self.q_sample(x_start_audio, t, None)
+			
 		indices = list(range(self.steps))[::-1]
 
 		for i in indices:
-			t = torch.tensor([i] * x_t.shape[0]).cuda()
-			model_mean, model_log_variance = self.p_mean_variance(model, x_t, t)
-			if sampling_noise:
+			t = torch.tensor([i] * batch_size).cuda()
+			model_mean, model_log_variance = self.p_mean_variance(model, x_t_image, x_t_text, x_t_audio, t, modal_falg)
+			# if sampling_noise:
 
-				noise = torch.randn_like(x_t)
-				nonzero_mask = ((t!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
-				x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
-			else:
-				x_t = model_mean
+			# 	noise = torch.randn_like(x_t)
+			# 	nonzero_mask = ((t!=0).float().view(-1, *([1]*(len(x_t.shape)-1))))
+			# 	x_t = model_mean + nonzero_mask * torch.exp(0.5 * model_log_variance) * noise
+			# else:
+			# 	x_t = model_mean
+			x_t = model_mean
 		return x_t
 
 
@@ -1365,12 +1497,19 @@ class GaussianDiffusion(nn.Module):
 			res = res[..., None]
 		return res.expand(broadcast_shape)
 
-	def p_mean_variance(self, model, x, t):
-		model_output = model(x, t, False)
+	def p_mean_variance(self, model, x_t_image, x_t_text, x_t_audio, t, modal_flag):
+		model_output = model(x_t_image, x_t_text, x_t_audio, t)
 
 		model_variance = self.posterior_variance
 		model_log_variance = self.posterior_log_variance_clipped
 
+		if modal_flag == 'image':
+			x = x_t_image
+		if modal_flag == 'text':
+			x = x_t_text
+		if modal_flag == 'audio':
+			x = x_t_audio
+			
 		model_variance = self._extract_into_tensor(model_variance, t, x.shape)
 		model_log_variance = self._extract_into_tensor(model_log_variance, t, x.shape)
 
@@ -1434,31 +1573,38 @@ class GaussianDiffusion(nn.Module):
 		return diff_loss, gc_loss, contra_loss
 	
 
-	def training_multimodal_feature_diffusion_losses(self, model, x_start):
+	def training_multimodal_feature_diffusion_losses(self, model, x_start_image, x_start_text, x_start_audio=None, modal_falg='image'):
 		'''
 			model: 降噪模型
 
 		'''
 		self.i += 1
 		#print("self.i:", self.i)
-		batch_size = x_start.size(0) # 1024
+		batch_size = x_start_image.size(0) # 1024
 		#print("x_start.shape:", x_start.shape) # x_start.shape: torch.Size([1024, 128])
 		ts = torch.randint(0, self.steps, (batch_size,)).long().cuda() # ts: tensor([2, 3, 3,  ..., 0, 1, 1], device='cuda:0')
 
-		noise = torch.randn_like(x_start) 
-		# print("noise:", noise)
-		if self.noise_scale != 0:
-			x_t = self.q_sample(x_start, ts, noise)
-		else:
-			x_t = x_start
+		noise_image = torch.randn_like(x_start_image) 
+		noise_text = torch.randn_like(x_start_text) 
+		x_t_image = self.q_sample(x_start_image, ts, noise_image)
+		x_t_text = self.q_sample(x_start_text,  ts, noise_text)
+		x_t_audio = None
+		if args.data == 'tiktok':
+				noise_audio = torch.randn_like(x_start_audio) 
+				x_t_audio = self.q_sample(x_start_audio, ts, noise_audio)
 		
-		# x_t作为采样后加噪的特征，形状不变
-		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 128]) 
-		#print("x_start.shape:", x_start.shape)
-		#print("x_t.shape:", x_t.shape) # x_t.shape: torch.Size([1024, 6710]) 
-		model_output = model(x_t, ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
+		model_output = model(x_t_image, x_t_text, x_t_audio,  ts) #计算模型预测t时刻的噪声: model_output.shape: torch.Size([1024, 6710])
+
 		#print("noise:", noise.shape, "model_output:", model_output.shape) # noise: torch.Size([1024, 128]) model_output: torch.Size([1024, 138])
-		mse = self.mean_flat((noise - model_output) ** 2)
+		if modal_falg == 'image':
+			mse = self.mean_flat((noise_image - model_output) ** 2)
+		
+		if modal_falg == 'text' :
+			mse = self.mean_flat((noise_text - model_output) ** 2)
+
+		if modal_falg == 'audio' and args.data == 'tiktok':
+			mse = self.mean_flat((noise_audio - model_output) ** 2)
+	
 		#print("mse:", mse.shape)
 		modal_feature_diffusion_loss = mse
 		# weight = self.SNR(ts - 1) - self.SNR(ts)
