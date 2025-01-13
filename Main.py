@@ -2,7 +2,7 @@ import torch
 import Utils.TimeLogger as logger
 from Utils.TimeLogger import log
 from Params import args
-from Model import Model, GaussianDiffusion, SparityDiffusion, BernoulliDiffusion, Denoise, ModalDenoise, GCNModel
+from Model import Model, GaussianDiffusion, SparityDiffusion, Denoise, ModalDenoise, MultimodalDenoiseModel, GCNModel
 from DataHandler import DataHandler
 import numpy as np
 from Utils.Utils import *
@@ -109,22 +109,54 @@ class Coach:
 		'''
 			实例化多模态特征扩散降噪模型
 		'''
-		in_dims = args.image_feats_dim
-		out_dims= args.image_feats_dim
-		# print("in_dims:", in_dims, "out_dims:", out_dims) # in_dims: [6710] out_dims: [6710]
-		self.image_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		# in_dims = args.image_feats_dim
+		# out_dims= args.image_feats_dim
+		# # print("in_dims:", in_dims, "out_dims:", out_dims) # in_dims: [6710] out_dims: [6710]
+		# self.image_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		# self.image_modal_denoise_optimizer = torch.optim.Adam(self.image_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
+
+		# in_dims = args.text_feats_dim
+		# out_dims= args.text_feats_dim
+		# self.text_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		# self.text_modal_denoise_optimizer = torch.optim.Adam(self.text_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
+
+		# if args.data == 'tiktok':
+		# 			in_dims = args.audio_feats_dim
+		# 			out_dims= args.audio_feats_dim
+		# 			self.audio_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+		# 			self.audio_modal_denoise_optimizer = torch.optim.Adam(self.audio_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
+		
+		self.image_modal_denoise_model = MultimodalDenoiseModel(
+				image_in_dims=args.image_feats_dim,
+				text_in_dims=args.text_feats_dim,
+				audio_in_dims=args.audio_feats_dim,
+				out_dims=args.image_feats_dim,
+				time_emb_size=args.d_emb_size,
+				modal_falg='image'
+				)
 		self.image_modal_denoise_optimizer = torch.optim.Adam(self.image_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
-
-		in_dims = args.text_feats_dim
-		out_dims= args.text_feats_dim
-		self.text_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
+			
+		self.text_modal_denoise_model = MultimodalDenoiseModel(
+				image_in_dims=args.image_feats_dim,
+				text_in_dims=args.text_feats_dim,
+				audio_in_dims=args.audio_feats_dim,
+				out_dims=args.text_feats_dim,
+				time_emb_size=args.d_emb_size,
+				modal_falg='text'
+				)
 		self.text_modal_denoise_optimizer = torch.optim.Adam(self.text_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
-
+		
 		if args.data == 'tiktok':
-					in_dims = args.audio_feats_dim
-					out_dims= args.audio_feats_dim
-					self.audio_modal_denoise_model = ModalDenoise(in_dims, out_dims, args.d_emb_size, norm=args.norm).cuda()
-					self.audio_modal_denoise_optimizer = torch.optim.Adam(self.audio_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
+
+			self.audio_modal_denoise_model = MultimodalDenoiseModel(
+					image_in_dims=args.image_feats_dim,
+					text_in_dims=args.text_feats_dim,
+					audio_in_dims=args.audio_feats_dim,
+					out_dims=args.audio_feats_dim,
+					time_emb_size=args.d_emb_size,
+					modal_falg='audio'
+					)
+			self.audio_modal_denoise_optimizer = torch.optim.Adam(self.audio_modal_denoise_model.parameters(), lr=args.lr, weight_decay=0)
 
 
 	def normalizeAdj(self, mat): 
@@ -197,7 +229,9 @@ class Coach:
 				
 			else:
 				image_batch, text_batch  = data 
-				image_batch, text_batch = image_batch.cuda(), text_batch.cuda()
+				audio_batch = None
+				image_batch, text_batch, audio_batch = image_batch.cuda(), text_batch.cuda(), audio_batch.cuda()
+				
 			# print("image_batch.shape:", image_batch.shape, "text_batch.shape:", text_batch.shape) #Baby:image_batch.shape: torch.Size([1024, 4096]) text_batch.shape: torch.Size([1024, 1024])
 			# print("image_batch.shape:", image_batch.shape, "text_batch.shape:", text_batch.shape, "audio_batch.shape:", audio_batch.shape)
 			self.image_modal_denoise_optimizer.zero_grad()
@@ -209,24 +243,32 @@ class Coach:
 			#print("image_batch.shape:", image_batch.shape) # image_batch.shape: torch.Size([1024, 128])
 			image_modal_difussion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
 				model=self.image_modal_denoise_model,
-				x_start=image_batch
+				x_start_image=image_batch,
+				x_start_text=text_batch,
+				x_start_audio=audio_batch,
+				modal_falg='image'
 			) 
 			#print("image diffusion done------->")
 			#print("text_batch.shape:", text_batch.shape)
 			text_modal_diffusion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
 				model=self.text_modal_denoise_model,
-				x_start=text_batch 
+				x_start_image=image_batch,
+				x_start_text=text_batch,
+				x_start_audio=audio_batch,
+				modal_falg='text'
 			)
 			#print("audio_batch.shape:", audio_batch.shape)
 			if args.data == 'tiktok':
 				audio_modal_diffusion_loss = self.diffusion_model.training_multimodal_feature_diffusion_losses(
 				model=self.audio_modal_denoise_model,
-				x_start=audio_batch
+				x_start_image=image_batch,
+				x_start_text=text_batch,
+				x_start_audio=audio_batch,
+				modal_falg='audio'
 			)
 
 			image_modal_difussion_loss = image_modal_difussion_loss.mean()
 			text_modal_diffusion_loss = text_modal_diffusion_loss.mean()
-
 
 			epDiLoss_image_modal += image_modal_difussion_loss.item() 
 			epDiLoss_text_modal += text_modal_diffusion_loss.item() 
@@ -280,18 +322,20 @@ class Coach:
 					image_batch, text_batch, audio_batch = image_batch.cuda(), text_batch.cuda(), audio_batch.cuda()
 				else:
 					image_batch, text_batch  = data 
-					image_batch, text_batch = image_batch.cuda(), text_batch.cuda()
+					audio_batch = None
+					image_batch, text_batch, audio_batch = image_batch.cuda(), text_batch.cuda(), audio_batch.cuda()
+					
 				#print("text_batch:.shape", text_batch.shape)
 				# 生成的图像batch
-				denoised_image_batch = self.diffusion_model.p_sample(self.image_modal_denoise_model, image_batch, args.sampling_steps, args.sampling_noise)
+				denoised_image_batch = self.diffusion_model.p_sample(self.image_modal_denoise_model, image_batch, text_batch, audio_batch, args.sampling_steps, args.sampling_noise, modal_falg='image')
 				# print("image_batch.shape:", image_batch.shape, "denoised_image_batch.shape:", denoised_image_batch.shape)
 				# 生成的文本batch
-				denoised_text_batch = self.diffusion_model.p_sample(self.text_modal_denoise_model, text_batch, args.sampling_steps, args.sampling_noise)		
+				denoised_text_batch = self.diffusion_model.p_sample(self.text_modal_denoise_model, image_batch, text_batch, audio_batch, args.sampling_steps, args.sampling_noise, modal_falg='text')		
 				#print("denoised_text_batch.shape:", denoised_text_batch.shape)
 				# print("text_batch.shape:", text_batch.shape, "denoised_text_batch.shape:", denoised_text_batch.shape)		
 				# 生成的音频batch
 				if args.data == 'tiktok':
-					denoised_audio_batch = self.diffusion_model.p_sample(self.audio_modal_denoise_model, audio_batch, args.sampling_steps, args.sampling_noise)
+					denoised_audio_batch = self.diffusion_model.p_sample(self.audio_modal_denoise_model, image_batch, text_batch, audio_batch, args.sampling_steps, args.sampling_noise, modal_falg='audio')
 					# print("audio_batch.shape:", image_batch.shape, "denoised_audio_batch.shape:", denoised_image_batch.shape)
 
 				image_modal_diffusion_representation_list.append(denoised_image_batch)
@@ -800,6 +844,7 @@ def seed_it(seed):
 	torch.manual_seed(seed)
 
 if __name__ == '__main__':
+	torch.cuda.set_device('cuda:0')
 	seed_it(args.seed)
 
 	os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
