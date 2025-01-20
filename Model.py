@@ -21,10 +21,10 @@ class GCNModel(nn.Module):
 		super(GCNModel, self).__init__()
 		
 		self.sparse = True
-		self.gcn_layer_num = 2
+		self.gcn_layer_num = 1
 		self.edgeDropper = SpAdjDropEdge(args.keepRate)
 		self.reg_weight = 1e-5
-		self.batch_size = 1024
+		# self.batch_size = 1024
 		self.modal_fusion = modal_fusion
 
 
@@ -44,36 +44,42 @@ class GCNModel(nn.Module):
 			self.image_residual_project = nn.Sequential(
 				nn.Linear(in_features=self.image_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU()
+				nn.LeakyReLU(),
+				nn.Dropout(0.3)
 			)
 			self.image_modal_project = nn.Sequential(
 				nn.Linear(in_features=args.latdim, out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU()
+				nn.LeakyReLU(),
+				nn.Dropout(0.1)
 			)
 
 		if self.text_embedding is not None:
 			self.text_residual_project = nn.Sequential(
 				nn.Linear(in_features=self.text_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU()
+				nn.LeakyReLU(),
+				nn.Dropout(0.3)
 			)
 			self.text_modal_project = nn.Sequential(
 				nn.Linear(in_features=args.latdim, out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU()
+				nn.LeakyReLU(),
+				nn.Dropout(0.1)
 			)
 
 		if self.audio_embedding is not None:
 			self.audio_residual_project = nn.Sequential(
 				nn.Linear(in_features=self.audio_embedding.shape[1], out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU()
+				nn.LeakyReLU(),
+				nn.Dropout(0.3)
 			)
 			self.audio_modal_project = nn.Sequential(
 				nn.Linear(in_features=args.latdim, out_features=args.latdim),
 				nn.BatchNorm1d(args.latdim),
-				nn.LeakyReLU()
+				nn.LeakyReLU(),
+				nn.Dropout(0.1)
 			)
 
 		self.softmax = nn.Softmax(dim=-1)
@@ -459,7 +465,7 @@ class GCNModel(nn.Module):
 			sepcial_image_ui_embedding = torch.multiply(image_prefer_embedding, sepcial_image_ui_embedding)
 			special_text_ui_embedding = torch.multiply(text_prefer_embedding, special_text_ui_embedding)
 
-			side_embedding = (sepcial_image_ui_embedding + special_text_ui_embedding + common_embedding) / 3
+			side_embedding = (sepcial_image_ui_embedding + special_text_ui_embedding + common_embedding) / 4
 			all_embedding = content_embedding + side_embedding
 		
 		# split 
@@ -512,7 +518,7 @@ class Model(nn.Module):
 
 		self.dropout = nn.Dropout(p=0.1)
 
-		self.leakyrelu = nn.LeakyReLU(0.2)
+		self.leakyrelu = nn.LeakyReLU()
 				
 	def getItemEmbeds(self):
 		return self.iEmbeds
@@ -705,90 +711,206 @@ class SpAdjDropEdge(nn.Module):
 		return torch.sparse.FloatTensor(newIdxs, newVals, adj.shape)
 
 
+# class ImageEncoder(nn.Module):
+# 	def __init__(self, image_feature_dim, hidden_dim):
+# 		super(ImageEncoder, self).__init__()
+# 		self.fc1 = nn.Linear(image_feature_dim, hidden_dim)
+# 		self.norm1 = nn.BatchNorm1d(hidden_dim)
+# 		self.relu1 = nn.LeakyReLU()
+# 		self.drop1 = nn.Dropout(0.3)
+
+# 		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+# 		self.norm2 = nn.BatchNorm1d(hidden_dim)
+# 		self.relu2 = nn.LeakyReLU()
+# 		self.drop2 = nn.Dropout(0.3)
+# 		#print("image_feature_dim:", image_feature_dim, "hidden_dim:", hidden_dim) # image_feature_dim: 138 hidden_dim: 128
+
+# 	def forward(self, image_features):
+# 		#print("image_features.shape:", image_features.shape) # image_features.shape: torch.Size([1024, 4106])
+# 		x_ = self.drop1(self.relu1(self.norm1(self.fc1(image_features))))
+# 		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+# 		return x + x_
+
+# class TextEncoder(nn.Module):
+# 	def __init__(self, text_feature_dim, hidden_dim):
+# 		super(TextEncoder, self).__init__()
+# 		self.fc1 = nn.Linear(text_feature_dim, hidden_dim)
+# 		self.norm1 = nn.BatchNorm1d(hidden_dim)
+# 		self.relu1 = nn.LeakyReLU()
+# 		self.drop1 = nn.Dropout(0.3)
+
+# 		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+# 		self.norm2 = nn.BatchNorm1d(hidden_dim)
+# 		self.relu2 = nn.LeakyReLU()
+# 		self.drop2 = nn.Dropout(0.3)
+
+
+# 	def forward(self, text_embeddings):
+# 		x_ = self.drop1(self.relu1(self.norm1(self.fc1(text_embeddings))))
+# 		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+# 		return x + x_
+
+
+# class AudioEncoder(nn.Module):
+# 	def __init__(self, audio_feature_dim, hidden_dim):
+# 		super(AudioEncoder, self).__init__()
+# 		self.fc1 = nn.Linear(audio_feature_dim, hidden_dim)
+# 		self.norm1 = nn.BatchNorm1d(hidden_dim)
+# 		self.relu1 = nn.LeakyReLU()
+# 		self.drop1 = nn.Dropout(0.3)
+
+# 		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+# 		self.norm2 = nn.BatchNorm1d(hidden_dim)
+# 		self.relu2 = nn.LeakyReLU()
+# 		self.drop2 = nn.Dropout(0.3)
+
+
+# 	def forward(self, audio_features):
+# 		x_= self.drop1(self.relu1(self.norm1(self.fc1(audio_features))))
+# 		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+# 		return x + x_
+
+
+# class CrossModalAttention(nn.Module):
+# 	def __init__(self, dim_key, dim_value, dim_query):
+# 		super(CrossModalAttention, self).__init__()
+# 		self.query_proj = nn.Linear(dim_query, dim_key)
+# 		self.key_proj = nn.Linear(dim_key, dim_key)
+# 		self.value_proj = nn.Linear(dim_value, dim_value)
+# 		self.softmax = nn.Softmax(dim=-1)
+
+# 	def forward(self, query, key, value):
+# 		#print("query:", query.shape, "key:", key.shape, "value:", value.shape) # query: torch.Size([1024, 128]) key: torch.Size([1024, 128]) value: torch.Size([1024, 128])
+
+# 		query = self.query_proj(query) # 
+# 		key = self.key_proj(key)
+# 		value = self.value_proj(value)
+# 		# print("query:", query.shape, "key:", key.shape, "value:", value.shape)
+# 		attention_scores = torch.matmul(query, key.transpose(-2, -1)) / (query.size(-1) ** 0.5)
+# 		attention_weights = self.softmax(attention_scores)
+
+# 		attended_value = torch.matmul(attention_weights, value)
+# 		return attended_value
+
+
+
 class ImageEncoder(nn.Module):
-	def __init__(self, image_feature_dim, hidden_dim):
-		super(ImageEncoder, self).__init__()
-		self.fc1 = nn.Linear(image_feature_dim, hidden_dim)
-		self.norm1 = nn.BatchNorm1d(hidden_dim)
-		self.relu1 = nn.LeakyReLU()
-		self.drop1 = nn.Dropout(0.3)
+    def __init__(self, image_feature_dim, hidden_dim):
+        super(ImageEncoder, self).__init__()
+        self.fc1 = nn.Linear(image_feature_dim, hidden_dim)
+        self.norm1 = nn.BatchNorm1d(hidden_dim)
+        self.relu1 = nn.LeakyReLU()
+        self.drop1 = nn.Dropout(0.3)
 
-		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-		self.norm2 = nn.BatchNorm1d(hidden_dim)
-		self.relu2 = nn.LeakyReLU()
-		self.drop2 = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.norm2 = nn.BatchNorm1d(hidden_dim)
+        self.relu2 = nn.LeakyReLU()
+        self.drop2 = nn.Dropout(0.1)
+        # 初始化权重
+        self._init_weights()
+        # print("image_feature_dim:", image_feature_dim, "hidden_dim:", hidden_dim)  # image_feature_dim: 138 hidden_dim: 128
 
+    def forward(self, image_features):
+        # print("image_features.shape:", image_features.shape)  # image_features.shape: torch.Size([1024, 4106])
+        x_ = self.drop1(self.relu1(self.norm1(self.fc1(image_features))))
+        x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+        return x + x_
 
-	def forward(self, image_features):
-		x_ = self.drop1(self.relu1(self.norm1(self.fc1(image_features))))
-		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
-		return x + x_
+    def _init_weights(self):
+        # 初始化 fc1 和 fc2 的权重
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='leaky_relu')
+        nn.init.constant_(self.fc1.bias, 0)
+        nn.init.constant_(self.fc2.bias, 0)
+
 
 class TextEncoder(nn.Module):
-	def __init__(self, text_feature_dim, hidden_dim):
-		super(TextEncoder, self).__init__()
-		self.fc1 = nn.Linear(text_feature_dim, hidden_dim)
-		self.norm1 = nn.BatchNorm1d(hidden_dim)
-		self.relu1 = nn.LeakyReLU()
-		self.drop1 = nn.Dropout(0.3)
+    def __init__(self, text_feature_dim, hidden_dim):
+        super(TextEncoder, self).__init__()
+        self.fc1 = nn.Linear(text_feature_dim, hidden_dim)
+        self.norm1 = nn.BatchNorm1d(hidden_dim)
+        self.relu1 = nn.LeakyReLU()
+        self.drop1 = nn.Dropout(0.3)
 
-		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-		self.norm2 = nn.BatchNorm1d(hidden_dim)
-		self.relu2 = nn.LeakyReLU()
-		self.drop2 = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.norm2 = nn.BatchNorm1d(hidden_dim)
+        self.relu2 = nn.LeakyReLU()
+        self.drop2 = nn.Dropout(0.1)
+        # 初始化权重
+        self._init_weights()
 
+    def forward(self, text_embeddings):
+        x_ = self.drop1(self.relu1(self.norm1(self.fc1(text_embeddings))))
+        x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+        return x + x_
 
-	def forward(self, text_embeddings):
-		x_ = self.drop1(self.relu1(self.norm1(self.fc1(text_embeddings))))
-		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
-		return x + x_
+    def _init_weights(self):
+        # 初始化 fc1 和 fc2 的权重
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='leaky_relu')
+        nn.init.constant_(self.fc1.bias, 0)
+        nn.init.constant_(self.fc2.bias, 0)
 
 
 class AudioEncoder(nn.Module):
-	def __init__(self, audio_feature_dim, hidden_dim):
-		super(AudioEncoder, self).__init__()
-		self.fc1 = nn.Linear(audio_feature_dim, hidden_dim)
-		self.norm1 = nn.BatchNorm1d(hidden_dim)
-		self.relu1 = nn.LeakyReLU()
-		self.drop1 = nn.Dropout(0.3)
+    def __init__(self, audio_feature_dim, hidden_dim):
+        super(AudioEncoder, self).__init__()
+        self.fc1 = nn.Linear(audio_feature_dim, hidden_dim)
+        self.norm1 = nn.BatchNorm1d(hidden_dim)
+        self.relu1 = nn.LeakyReLU()
+        self.drop1 = nn.Dropout(0.3)
 
-		self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-		self.norm2 = nn.BatchNorm1d(hidden_dim)
-		self.relu2 = nn.LeakyReLU()
-		self.drop2 = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+        self.norm2 = nn.BatchNorm1d(hidden_dim)
+        self.relu2 = nn.LeakyReLU()
+        self.drop2 = nn.Dropout(0.1)
+        # 初始化权重
+        self._init_weights()
 
+    def forward(self, audio_features):
+        x_ = self.drop1(self.relu1(self.norm1(self.fc1(audio_features))))
+        x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
+        return x + x_
 
-	def forward(self, audio_features):
-		x_= self.drop1(self.relu1(self.norm1(self.fc1(audio_features))))
-		x = self.drop2(self.relu2(self.norm2(self.fc2(x_))))
-		return x + x_
+    def _init_weights(self):
+        # 初始化 fc1 和 fc2 的权重
+        nn.init.kaiming_normal_(self.fc1.weight, nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.fc2.weight, nonlinearity='leaky_relu')
+        nn.init.constant_(self.fc1.bias, 0)
+        nn.init.constant_(self.fc2.bias, 0)
 
-'''
-	query: fusion tensor
-	key:   modal tensor
-	key:   modal tensor
-'''
 
 class CrossModalAttention(nn.Module):
-	def __init__(self, dim_key, dim_value, dim_query):
-		super(CrossModalAttention, self).__init__()
-		self.query_proj = nn.Linear(dim_query, dim_key)
-		self.key_proj = nn.Linear(dim_key, dim_key)
-		self.value_proj = nn.Linear(dim_value, dim_value)
-		self.softmax = nn.Softmax(dim=-1)
+    def __init__(self, dim_key, dim_value, dim_query):
+        super(CrossModalAttention, self).__init__()
+        self.query_proj = nn.Linear(dim_query, dim_key)
+        self.key_proj = nn.Linear(dim_key, dim_key)
+        self.value_proj = nn.Linear(dim_value, dim_value)
+        self.softmax = nn.Softmax(dim=-1)
+        # 初始化权重
+        self._init_weights()
 
-	def forward(self, query, key, value):
-		#print("query:", query.shape, "key:", key.shape, "value:", value.shape) # query: torch.Size([1024, 128]) key: torch.Size([1024, 128]) value: torch.Size([1024, 128])
+    def forward(self, query, key, value):
+        # print("query:", query.shape, "key:", key.shape, "value:", value.shape)  # query: torch.Size([1024, 128]) key: torch.Size([1024, 128]) value: torch.Size([1024, 128])
 
-		query = self.query_proj(query) # 
-		key = self.key_proj(key)
-		value = self.value_proj(value)
-		# print("query:", query.shape, "key:", key.shape, "value:", value.shape)
-		attention_scores = torch.matmul(query, key.transpose(-2, -1)) / (query.size(-1) ** 0.5)
-		attention_weights = self.softmax(attention_scores)
+        query = self.query_proj(query)
+        key = self.key_proj(key)
+        value = self.value_proj(value)
+        # print("query:", query.shape, "key:", key.shape, "value:", value.shape)
+        attention_scores = torch.matmul(query, key.transpose(-2, -1)) / (query.size(-1) ** 0.5)
+        attention_weights = self.softmax(attention_scores)
 
-		attended_value = torch.matmul(attention_weights, value)
-		return attended_value
+        attended_value = torch.matmul(attention_weights, value)
+        return attended_value
+
+    def _init_weights(self):
+        # 初始化 query_proj, key_proj 和 value_proj 的权重
+        nn.init.kaiming_normal_(self.query_proj.weight, nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.key_proj.weight, nonlinearity='leaky_relu')
+        nn.init.kaiming_normal_(self.value_proj.weight, nonlinearity='leaky_relu')
+        nn.init.constant_(self.query_proj.bias, 0)
+        nn.init.constant_(self.key_proj.bias, 0)
+        nn.init.constant_(self.value_proj.bias, 0)
 
 
 class MultimodalDenoiseModel(nn.Module):
@@ -926,11 +1048,11 @@ class ModalDenoise(nn.Module):
 			nn.Linear(in_features=self.in_dims // 2, out_features=self.in_dims//4),
 			nn.BatchNorm1d(self.in_dims//4),
 			nn.LeakyReLU(),
-			nn.Dropout(0.3),
+			nn.Dropout(0.2),
 			nn.Linear(in_features=self.in_dims // 4, out_features=self.in_dims//8),
 			nn.BatchNorm1d(self.in_dims//8),
 			nn.LeakyReLU(),
-			nn.Dropout(0.3)
+			nn.Dropout(0.1)
 
 		)
 
@@ -942,11 +1064,11 @@ class ModalDenoise(nn.Module):
 			nn.Linear(in_features=self.in_dims//4, out_features=self.in_dims//2),
 			nn.BatchNorm1d(self.in_dims // 2),
 			nn.LeakyReLU(),
-			nn.Dropout(0.3),
+			nn.Dropout(0.2),
 			nn.Linear(in_features=self.in_dims//2, out_features=self.in_dims),
 			nn.BatchNorm1d(self.in_dims),
 			nn.LeakyReLU(),
-			nn.Dropout(0.3)
+			nn.Dropout(0.1)
 		)
 
 
@@ -1419,6 +1541,8 @@ class GaussianDiffusion(nn.Module):
 
 	def calculate_for_diffusion(self):
 		alphas = 1.0 - self.betas
+		self.alphas = alphas
+		self.sqrt_alphas = torch.sqrt(alphas)
 		self.alphas_cumprod = torch.cumprod(alphas, axis=0).cuda()
 		self.alphas_cumprod_prev = torch.cat([torch.tensor([1.0]).cuda(), self.alphas_cumprod[:-1]]).cuda()
 		self.alphas_cumprod_next = torch.cat([self.alphas_cumprod[1:], torch.tensor([0.0]).cuda()]).cuda()
@@ -1433,6 +1557,7 @@ class GaussianDiffusion(nn.Module):
 			self.betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
 		)
 		self.posterior_log_variance_clipped = torch.log(torch.cat([self.posterior_variance[1].unsqueeze(0), self.posterior_variance[1:]]))
+
 		self.posterior_mean_coef1 = (self.betas * torch.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
 		self.posterior_mean_coef2 = ((1.0 - self.alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - self.alphas_cumprod))
 
@@ -1512,6 +1637,8 @@ class GaussianDiffusion(nn.Module):
 			
 		model_variance = self._extract_into_tensor(model_variance, t, x.shape)
 		model_log_variance = self._extract_into_tensor(model_log_variance, t, x.shape)
+
+		#model_mean = (x - (1 -  self._extract_into_tensor(self.alphas, t, x.shape) /  torch.sqrt(1 - self._extract_into_tensor(self.alphas_cumprod, t, x.shape)))) / self._extract_into_tensor(self.sqrt_alphas, t, x.shape) 
 
 		model_mean = (self._extract_into_tensor(self.posterior_mean_coef1, t, x.shape) * model_output + self._extract_into_tensor(self.posterior_mean_coef2, t, x.shape) * x)
 		
@@ -1654,7 +1781,8 @@ class SparityDiffusion(nn.Module):
 		self.open_noise_adaptive = True
 		# self.noise_adaptive_factor = 1.0
 		self.postive_gain_degree  = 0.9
-
+		self.sparse_temp = args.sparse_temp 
+		
 		self.noise_scale = noise_scale
 		self.noise_min = noise_min
 		self.noise_max = noise_max
@@ -1798,13 +1926,14 @@ class SparityDiffusion(nn.Module):
 			#print("noise_coe.unsqueeze:", noise_coe)
 			noise_coe =  noise_coe * batch_postive_position_mask_matirx 
 			
-
 		if noise is None:
 			noise = torch.randn_like(x_start)
 			# print("dense noise:", noise)
 		# print("dense noise:", noise)
 		# print("noise_coe:", noise_coe)
+		# TODO: Ablation Study  w/o MUDG-NS
 		noise = noise * noise_coe
+		#noise = noise
 		#print("sparity noise:", noise)
 		return self._extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start + self._extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise 
 
@@ -1879,11 +2008,10 @@ class SparityDiffusion(nn.Module):
 		model_feat_embedding_origin = torch.mm(x_start, model_feat_embedding)
 		model_feat_embedding_diffusion = torch.mm(model_output, model_feat_embedding)
 
-		contra_loss = self.infoNCE_loss(model_feat_embedding_origin, model_feat_embedding_diffusion, 0.2)
+		contra_loss = self.infoNCE_loss(model_feat_embedding_origin, model_feat_embedding_diffusion, self.sparse_temp)
 
 		return diff_loss, gc_loss, contra_loss
 	
-
 			
 	def infoNCE_loss(self, view1, view2,  temperature):
 		'''
@@ -1903,6 +2031,7 @@ class SparityDiffusion(nn.Module):
 	def mean_flat(self, tensor):
 		return tensor.mean(dim=list(range(1, len(tensor.shape))))
 	
+
 	def SNR(self, t):
 		self.alphas_cumprod = self.alphas_cumprod.cuda()
 		return self.alphas_cumprod[t] / (1 - self.alphas_cumprod[t])
